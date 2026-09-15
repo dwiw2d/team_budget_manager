@@ -1,0 +1,179 @@
+{
+  "version": "V2",
+  "requestId": "6f1c2d2e-0000-4000-8000-000000000001",
+  "timestamp": 1789530896000,
+  "images": [
+    {
+      "uid": "sample-uid",
+      "name": "receipt",
+      "inferResult": "SUCCESS",
+      "message": "SUCCESS",
+      "validationResult": { "result": "NO_REQUESTED" },
+      "receipt": {
+        "meta": { "estimatedLanguage": "ko" },
+        "result": {
+          "storeInfo": {
+            "name": {
+              "text": "GS25 역삼점",
+              "formatted": { "value": "GS25 역삼점" },
+              "keyText": "",
+              "confidenceScore": 0.95703,
+              "boundingPolys": [
+                { "vertices": [ { "x": 32.0, "y": 196.0 }, { "x": 164.0, "y": 196.0 }, { "x": 164.0, "y": 232.0 }, { "x": 32.0, "y": 232.0 } ] }
+              ],
+              "maskingPolys": []
+            },
+            "addresses": [
+              {
+                "text": "서울특별시 강남구 테헤란로 1",
+                "formatted": { "value": "서울특별시 강남구 테헤란로 1" },
+                "keyText": "",
+                "confidenceScore": 0.94554,
+                "boundingPolys": [],
+                "maskingPolys": []
+              }
+            ],
+            "tel": [
+              {
+                "text": "02-000-0000",
+                "formatted": { "value": "020000000" },
+                "keyText": "TEL:",
+                "confidenceScore": 0.90208,
+                "boundingPolys": []
+              }
+            ]
+          },
+          "paymentInfo": {
+            "date": {
+              "text": "2026-09-15 (화)",
+              "formatted": { "year": "2026", "month": "09", "day": "15" },
+              "keyText": "",
+              "confidenceScore": 0.86487,
+              "boundingPolys": [],
+              "maskingPolys": []
+            },
+            "time": {
+              "text": "12:34:56",
+              "formatted": { "hour": "12", "minute": "34", "second": "56" },
+              "keyText": "",
+              "confidenceScore": 0.92913,
+              "boundingPolys": []
+            },
+            "cardInfo": {
+              "company": {
+                "text": "신한카드",
+                "formatted": { "value": "신한카드" },
+                "keyText": "",
+                "confidenceScore": 0.91,
+                "boundingPolys": []
+              },
+              "number": {
+                "text": "1234-56**-****-5678",
+                "formatted": { "value": "1234-56**-****-5678" },
+                "keyText": "[카드번호]",
+                "confidenceScore": 0.85504,
+                "boundingPolys": []
+              }
+            },
+            "confirmNum": {
+              "text": "12345678",
+              "formatted": { "value": "12345678" },
+              "keyText": "승인번호",
+              "confidenceScore": 0.9,
+              "boundingPolys": []
+            }
+          },
+          "subResults": [
+            {
+              "items": [
+                {
+                  "name": {
+                    "text": "삼각김밥 참치마요",
+                    "formatted": { "value": "삼각김밥 참치마요" },
+                    "keyText": "",
+                    "confidenceScore": 0.84299,
+                    "boundingPolys": [],
+                    "maskingPolys": []
+                  },
+                  "count": {
+                    "text": "1",
+                    "formatted": { "value": "1" },
+                    "keyText": "",
+                    "confidenceScore": 0.9,
+                    "boundingPolys": []
+                  },
+                  "price": {
+                    "price": {
+                      "text": "1,600",
+                      "formatted": { "value": "1600" },
+                      "keyText": "",
+                      "confidenceScore": 0.95924,
+                      "boundingPolys": []
+                    },
+                    "unitPrice": {
+                      "text": "1,600",
+                      "formatted": { "value": "1600" },
+                      "keyText": "",
+                      "confidenceScore": 0.95,
+                      "boundingPolys": []
+                    }
+                  }
+                },
+                {
+                  "name": {
+                    "text": "생수 500ml",
+                    "formatted": { "value": "생수 500ml" },
+                    "keyText": "",
+                    "confidenceScore": 0.88,
+                    "boundingPolys": [],
+                    "maskingPolys": []
+                  },
+                  "count": {
+                    "text": "1",
+                    "formatted": { "value": "1" },
+                    "keyText": "",
+                    "confidenceScore": 0.9,
+                    "boundingPolys": []
+                  },
+                  "price": {
+                    "price": {
+                      "text": "10,700",
+                      "formatted": { "value": "10700" },
+                      "keyText": "",
+                      "confidenceScore": 0.95,
+                      "boundingPolys": []
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "totalPrice": {
+            "price": {
+              "text": "12,300",
+              "formatted": { "value": "12300" },
+              "keyText": "받을금액:",
+              "confidenceScore": 0.89884,
+              "boundingPolys": [
+                { "vertices": [ { "x": 521.0, "y": 751.0 }, { "x": 678.0, "y": 751.0 }, { "x": 678.0, "y": 786.0 }, { "x": 521.0, "y": 786.0 } ] }
+              ]
+            }
+          },
+          "subTotal": [
+            {
+              "taxPrice": [
+                {
+                  "text": "1,118",
+                  "formatted": { "value": "1118" },
+                  "keyText": "부 가 세:",
+                  "confidenceScore": 0.93311,
+                  "boundingPolys": []
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
