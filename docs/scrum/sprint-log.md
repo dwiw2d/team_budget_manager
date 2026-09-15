@@ -22,4 +22,5 @@ PM(코디네이터 세션)이 유지한다. 각 스프린트의 목표, 결과, 
 
 ## 스프린트 3: 배포 및 최종 검수 (2026-09-16 새벽)
 - 목표: T6 Actions·Pages·Docker 배포 검증 및 배포 기록, T7 배포본에서 체크리스트 재검수·사인오프.
-- 결과: (진행 중)
+- 결과(T6 배포): Actions run 35012636899 success(후속 35013243529 도 success). https://dwiw2d.github.io/team_budget_manager/ 200, manifest·sw.js 200, /payments 는 Pages 404.html fallback 특성으로 상태 404 지만 앱 셸 렌더 정상. 브라우저에서 로그인→홈 확인. docker build·컨테이너 200 확인. 배포 기록 docs/scrum/deploy-record.md(263ca0a). origin/main = 263ca0a.
+- 결과(T7 최종 검수): (진행 중)
