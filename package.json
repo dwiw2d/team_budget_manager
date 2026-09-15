@@ -1,0 +1,38 @@
+{
+  "name": "sw2hw-ledger",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "sb:link": "node scripts/sb.mjs link",
+    "sb:push": "node scripts/sb.mjs push",
+    "sb:functions": "node scripts/sb.mjs functions",
+    "sb:secrets": "node scripts/sb.mjs secrets",
+    "sb:seed-owner": "node scripts/seed-owner.mjs",
+    "sb:disable-signup": "node scripts/disable-signup.mjs",
+    "db:smoke": "node scripts/db-smoke.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.116.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "react-router-dom": "^7.18.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "supabase": "^2.117.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0",
+    "vite-plugin-pwa": "^1.3.0",
+    "vitest": "^5.0.1"
+  }
+}
