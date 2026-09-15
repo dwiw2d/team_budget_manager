@@ -9,4 +9,11 @@ PM(코디네이터 세션)이 유지한다. 각 스프린트의 목표, 결과, 
 
 ## 스프린트 1: 백엔드·프런트·운영 병렬 (2026-09-16 새벽)
 - 목표: T1 스키마·RLS·Edge Function·운영 스크립트 및 클라우드 적용, T2 6개 화면, T3 GitHub 저장소·Pages 워크플로·Docker·README.
+- 결과(T1 백엔드): 0001 마이그레이션·ocr 함수·스크립트 3개 커밋(96a08e4, 672b5a0, 8ebecbf). 클라우드 적용 완료: 마이그레이션 remote 적용, ocr ACTIVE, 가입 차단(422 signup_disabled), 계정 1개 생성 및 로그인 확인, db:smoke (a)~(f) PASS, 함수 401/503/400/204 확인. 네이버 시크릿은 아침에 등록.
+- 결과(T2 프런트): 데이터 계층 + 화면 6개 커밋(97dd2e6, 2ba5a85, cd20a79). typecheck·test 14건·build·base path 빌드 통과. 로그인 화면·오류 문구 브라우저 확인. 로그인 이후 실데이터 확인은 계정 생성 전이라 QA 로 이관.
+- 결과(T3 운영): 공개 저장소 dwiw2d/team_budget_manager 생성·푸시, Pages(workflow)·변수 등록, deploy.yml·Dockerfile·nginx.conf·compose·README 커밋(91cc612, f06d36b, 0814002). Actions success, https://dwiw2d.github.io/team_budget_manager/ 200, docker build·컨테이너 curl 200.
+- 막힌 것: 없음. 참고: APP_OWNER_PASSWORD 가 5자(Supabase 기본 최소 6자)지만 관리자 API 생성·로그인은 정상. 설정의 비밀번호 변경은 8자 이상 요구.
+
+## 스프린트 2: QA 검수 및 수정 (2026-09-16 새벽)
+- 목표: T4 체크리스트 전 항목 검증·보고서, T5 발견 사항 수정 및 게이트 재통과.
 - 결과: (진행 중)
