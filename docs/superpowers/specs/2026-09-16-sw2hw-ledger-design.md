@@ -132,7 +132,7 @@ PWA: manifest `name`/`short_name` "SW2HW 장부", `display: standalone`, `lang: 
 
 ## 8. 배포·운영
 
-- **저장소**: GitHub `dwiw2d/team_budget_manager`(공개). 이 워크트리 브랜치 `wolfeel`을 원격 `main`으로 푸시한다(`git push origin wolfeel:main`).
+- **저장소**: GitHub `dwiw2d/team_budget_manager`(공개). 이 워크트리의 현재 브랜치(`receipt-tracker-pwa`)를 원격 `main`으로 푸시한다(`git push origin HEAD:main`). 브랜치 이름을 명령에 쓰지 말고 항상 `HEAD:main`을 쓴다.
 - **GitHub Actions** `.github/workflows/deploy.yml`: `main` 푸시 시 `npm ci` → `npm test` → `npm run typecheck` → `npm run build`(`VITE_BASE_PATH=/team_budget_manager/`, `VITE_SUPABASE_URL`·`VITE_SUPABASE_ANON_KEY`는 저장소 **variables**) → `dist/404.html`을 `index.html` 복사본으로 생성 → `actions/upload-pages-artifact` → `actions/deploy-pages`. Pages 소스는 GitHub Actions. 저장소 변수는 `gh variable set`으로 등록.
 - **Docker**: `Dockerfile`(1단계 node:24-alpine 빌드, `ARG VITE_*`; 2단계 nginx:alpine, `nginx.conf`에 `try_files $uri /index.html`), `docker-compose.yml`(포트 8080). `docker build`가 성공해야 한다.
 - **Supabase 스크립트(package.json)**: `sb:link`, `sb:push`(`supabase db push`), `sb:functions`(`supabase functions deploy ocr`), `sb:secrets`, `sb:seed-owner`, `sb:disable-signup`, `db:smoke`. 전부 `.env.local`을 읽는다(`dotenv` 없이 Node 24의 `process.loadEnvFile` 사용).
