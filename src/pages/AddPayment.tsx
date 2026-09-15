@@ -184,7 +184,7 @@ export default function AddPayment() {
             <span className={label}>결제 일시</span>
             <input
               type="datetime-local"
-              className={input}
+              className={`${input} min-w-0 appearance-none [&::-webkit-date-and-time-value]:text-left`}
               value={form.paidAt}
               onChange={(e) => set("paidAt", e.target.value)}
               required
