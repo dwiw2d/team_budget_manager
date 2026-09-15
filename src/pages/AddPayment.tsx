@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { btnPrimary, btnSecondary, h1, input, label } from "../components/ui";
+import { autoCardId } from "../lib/cards";
 import { fromDatetimeLocal, toDatetimeLocal } from "../lib/dates";
 import { insertPayment, listCardBalances } from "../lib/db";
 import { recognizeReceipt } from "../lib/ocr";
@@ -25,14 +26,6 @@ const blank = (): Form => ({
   ocrCardNumber: null,
   source: "manual",
 });
-
-/** 읽은 카드번호의 마지막 4자리와 last4 가 같은 카드가 정확히 하나일 때만 그 카드 id */
-function autoCardId(cards: CardBalance[], cardNumber: string | null): string {
-  const digits = (cardNumber ?? "").replace(/\D/g, "");
-  if (digits.length < 4) return "";
-  const matches = cards.filter((c) => c.last4 === digits.slice(-4));
-  return matches.length === 1 ? matches[0].id : "";
-}
 
 export default function AddPayment() {
   const navigate = useNavigate();
