@@ -31,7 +31,7 @@ function loadImage(file: File): Promise<HTMLImageElement> {
 }
 
 /** canvas 로 긴 변 1600px, JPEG 0.85 로 줄여 base64(data: 접두어 없음)로 만든다. */
-export async function compressImage(file: File): Promise<{ base64: string; format: "jpg" }> {
+export async function compressImage(file: File): Promise<{ image: string; format: "jpg" }> {
   const img = await loadImage(file);
   const scale = Math.min(1, MAX_EDGE / Math.max(img.naturalWidth, img.naturalHeight));
   const canvas = document.createElement("canvas");
@@ -39,7 +39,7 @@ export async function compressImage(file: File): Promise<{ base64: string; forma
   canvas.height = Math.round(img.naturalHeight * scale);
   canvas.getContext("2d")!.drawImage(img, 0, 0, canvas.width, canvas.height);
   const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
-  return { base64: dataUrl.slice(dataUrl.indexOf(",") + 1), format: "jpg" };
+  return { image: dataUrl.slice(dataUrl.indexOf(",") + 1), format: "jpg" };
 }
 
 /** 사진을 줄여 `ocr` 함수에 보내고 정규화된 결과를 받는다. 실패는 OcrError. */
