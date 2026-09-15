@@ -23,4 +23,9 @@ PM(코디네이터 세션)이 유지한다. 각 스프린트의 목표, 결과, 
 ## 스프린트 3: 배포 및 최종 검수 (2026-09-16 새벽)
 - 목표: T6 Actions·Pages·Docker 배포 검증 및 배포 기록, T7 배포본에서 체크리스트 재검수·사인오프.
 - 결과(T6 배포): Actions run 35012636899 success(후속 35013243529 도 success). https://dwiw2d.github.io/team_budget_manager/ 200, manifest·sw.js 200, /payments 는 Pages 404.html fallback 특성으로 상태 404 지만 앱 셸 렌더 정상. 브라우저에서 로그인→홈 확인. docker build·컨테이너 200 확인. 배포 기록 docs/scrum/deploy-record.md(263ca0a). origin/main = 263ca0a.
-- 결과(T7 최종 검수): (진행 중)
+- 결과(T7 최종 검수): 배포본에서 §11 20항목 재검수 PASS 19 / BLOCKED 1(실제 영수증 인식, 네이버 키 미등록) / FAIL 0. 하위 경로 새로고침·PWA·세션 가드·REST 직접 접근(anon 0건, delete 0건, update 거부, signup 422)·docker build·db:smoke 통과. QA 데이터 정리(결제 6건, 카드 2장) 및 비밀번호 원복. 사인오프 docs/qa/final-signoff.md(19d0e35, 4a4a2cd).
+
+## 총평 (PM)
+- 4개 스프린트(0~3), 작업자 8명(T0~T7)으로 배포 준비 완료 상태 도달. origin/main = 4a4a2cd. 배포 URL https://dwiw2d.github.io/team_budget_manager/
+- 아침에 사용자가 할 일: (1) 설정에서 비밀번호 변경(최우선), (2) .env.local 에 NAVER_OCR_INVOKE_URL·NAVER_OCR_SECRET 추가 후 `npm run sb:secrets`, 영수증 1장으로 인식 확인, (3) 첫 카드 등록.
+- 운영 메모: Orca 작업자 worker_done 이 T0 에서만 capability 오류로 거부됨(이후 작업자는 정상). Docker Desktop 은 QA 가 켜 두었음.
