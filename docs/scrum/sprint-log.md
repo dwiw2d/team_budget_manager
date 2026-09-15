@@ -18,4 +18,8 @@ PM(코디네이터 세션)이 유지한다. 각 스프린트의 목표, 결과, 
 - 목표: T4 체크리스트 전 항목 검증·보고서, T5 발견 사항 수정 및 게이트 재통과.
 - 결과(T4 QA): 게이트 7종 통과. §11 20항목 중 PASS 19 / FAIL 1. 보고서 docs/qa/sprint2-report.md(5d13dde). BUG-1(high) OCR 요청 본문 키 불일치(앱 base64 vs 함수 image), BUG-2(low) 카드 자동 선택이 마스킹된 끝자리를 무시, 스펙 이탈·관찰 7건(D-1~D-7). 실제 영수증 인식은 네이버 키 대기로 BLOCKED. 클라우드 QA 데이터 정리 완료.
 - PM 결정: BUG-1 은 스펙 §5 계약(image/format)대로 클라이언트 수정. BUG-2 는 "공백·하이픈 제거 후 마지막 4문자가 모두 숫자일 때만 비교, 마스킹 시 자동 선택 안 함"으로 확정. D-1(비밀번호 8자 이상)은 유지. D-4·D-6 은 단순 수정, 나머지는 변경 없음.
-- 결과(T5 수정): (진행 중)
+- 결과(T5 수정): BUG-1(OCR 요청 키 image), BUG-2(카드 자동 선택 규칙), D-4(import attribute) 수정. D-1 유지, D-6 은 실제 실행 확인 후 수정 불필요. 커밋 4efbbf1, 92387ea, 5e8648f, 202f711. 게이트 5개(typecheck, test 17건, build, db:smoke, docker build) 재통과. 로컬 Supabase + MOCK 으로 영수증 업로드→자동 채움→카드 자동 선택 확인. origin/main = 202f711. 수정 내역 docs/qa/sprint2-fixes.md.
+
+## 스프린트 3: 배포 및 최종 검수 (2026-09-16 새벽)
+- 목표: T6 Actions·Pages·Docker 배포 검증 및 배포 기록, T7 배포본에서 체크리스트 재검수·사인오프.
+- 결과: (진행 중)
