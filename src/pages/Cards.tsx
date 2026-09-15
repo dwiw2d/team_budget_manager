@@ -115,7 +115,7 @@ export default function Cards() {
           type="button"
           className={btnSecondary}
           disabled={busy}
-          onClick={() => setEditing({ name: "", initial: "", last4: "" })}
+          onClick={() => { setError(""); setEditing({ name: "", initial: "", last4: "" }); }}
         >
           카드 추가
         </button>
@@ -140,8 +140,19 @@ export default function Cards() {
       )}
 
       {editing && (
-        <form onSubmit={saveCard} className="mb-4 space-y-3 rounded-lg border border-slate-200 p-3">
-          <p className="font-semibold text-slate-900">{editing.id ? "카드 수정" : "카드 추가"}</p>
+        <div
+          className="fixed inset-0 z-20 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => !busy && setEditing(null)}
+        >
+          <form
+            onSubmit={saveCard}
+            role="dialog"
+            aria-modal="true"
+            aria-label={editing.id ? "카드 수정" : "카드 추가"}
+            className="w-full max-w-sm space-y-3 rounded-2xl bg-white p-5 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+          <p className="text-lg font-bold text-slate-900">{editing.id ? "카드 수정" : "카드 추가"}</p>
           <label className="block">
             <span className={label}>이름</span>
             <input
@@ -174,6 +185,7 @@ export default function Cards() {
               onChange={(e) => setEditing({ ...editing, last4: e.target.value.replace(/\D/g, "") })}
             />
           </label>
+          {error && <p className="text-sm text-red-600">{error}</p>}
           <div className="flex gap-2">
             <button type="submit" className={`${btnPrimary} flex-1`} disabled={busy}>
               저장
@@ -182,10 +194,11 @@ export default function Cards() {
               닫기
             </button>
           </div>
-        </form>
+          </form>
+        </div>
       )}
 
-      {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
+      {error && !editing && <p className="mb-3 text-sm text-red-600">{error}</p>}
 
       {!cards ? (
         <p className="text-slate-500">불러오는 중…</p>
@@ -215,7 +228,7 @@ export default function Cards() {
                   type="button"
                   className={btnText}
                   disabled={busy}
-                  onClick={() => setEditing({ id: c.id, name: c.name, initial: String(c.initial_balance), last4: c.last4 ?? "" })}
+                  onClick={() => { setError(""); setEditing({ id: c.id, name: c.name, initial: String(c.initial_balance), last4: c.last4 ?? "" }); }}
                 >
                   수정
                 </button>
