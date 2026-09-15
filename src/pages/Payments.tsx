@@ -51,7 +51,7 @@ function Sheet({
   return (
     <div className="fixed inset-0 z-20 flex items-end bg-black/40" onClick={onClose}>
       <div
-        className="max-h-[90dvh] w-full overflow-y-auto rounded-t-2xl bg-white p-5"
+        className="max-h-[90dvh] w-full overflow-y-auto rounded-t-2xl bg-white p-5 pb-[calc(env(safe-area-inset-bottom)+1.25rem)]"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between">

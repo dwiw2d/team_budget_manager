@@ -46,25 +46,25 @@ function Layout() {
   const showFab = pathname === "/" || pathname === "/payments";
   return (
     <>
-      <main className="mx-auto w-full max-w-md px-4 pb-24 pt-4">
+      <main className="mx-auto w-full max-w-md px-4 pb-[calc(env(safe-area-inset-bottom)+6rem)] pt-[calc(env(safe-area-inset-top)+1rem)]">
         <Outlet />
       </main>
       {showFab && (
         <Link
           to="/add"
-          className="fixed bottom-20 right-4 flex h-14 items-center rounded-full bg-slate-900 px-5 font-semibold text-white shadow-lg"
+          className="fixed bottom-[calc(env(safe-area-inset-bottom)+5rem)] right-4 flex h-14 items-center rounded-full bg-slate-900 px-5 font-semibold text-white shadow-lg"
         >
           ＋ 결제 추가
         </Link>
       )}
-      <nav className="fixed inset-x-0 bottom-0 flex h-16 border-t border-slate-200 bg-white">
+      <nav className="fixed inset-x-0 bottom-0 flex border-t border-slate-200 bg-white pb-[env(safe-area-inset-bottom)]">
         {TABS.map(([to, name]) => (
           <NavLink
             key={to}
             to={to}
             end
             className={({ isActive }) =>
-              `flex flex-1 items-center justify-center text-sm ${
+              `flex h-16 flex-1 items-center justify-center text-sm ${
                 isActive ? "font-bold text-slate-900" : "text-slate-500"
               }`
             }
@@ -94,7 +94,7 @@ export default function App() {
   return (
     <BrowserRouter basename={import.meta.env.BASE_URL}>
       {!online && (
-        <div className="sticky top-0 z-10 bg-red-600 px-4 py-2 text-center text-sm text-white">
+        <div className="sticky top-0 z-10 bg-red-600 px-4 pb-2 pt-[calc(env(safe-area-inset-top)+0.5rem)] text-center text-sm text-white">
           네트워크 연결을 확인하세요
         </div>
       )}
