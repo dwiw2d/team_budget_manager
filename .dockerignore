@@ -1,5 +1,8 @@
 node_modules
 dist
+dev-dist
 .git
+.github
 .env*
 supabase/.temp
+docs

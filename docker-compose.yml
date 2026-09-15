@@ -1,0 +1,12 @@
+services:
+  web:
+    build:
+      context: .
+      args:
+        # 같은 폴더의 .env 파일에서 읽는다(.env.local 을 .env 로 복사하거나 값을 채운다).
+        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL}
+        VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY}
+        VITE_BASE_PATH: ${VITE_BASE_PATH:-/}
+    ports:
+      - "8080:80"
+    restart: unless-stopped
