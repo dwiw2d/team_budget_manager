@@ -5,7 +5,8 @@ export interface Card {
   owner_id: string;
   name: string;
   initial_balance: number;
-  last4: string | null;
+  /** 카드번호 앞 6~8자리 또는 null. 영수증은 뒤 4자리를 가리므로 앞자리로 맞춘다 */
+  card_prefix: string | null;
   /** 마지막 초기화 시각(ISO) 또는 null(초기화 전) */
   reset_at: string | null;
   created_at: string;
@@ -50,5 +51,5 @@ export interface NewPayment {
 export interface CardInput {
   name: string;
   initial_balance: number;
-  last4: string | null;
+  card_prefix: string | null;
 }

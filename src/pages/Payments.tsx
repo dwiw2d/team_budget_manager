@@ -166,7 +166,7 @@ export default function Payments() {
         {cards.map((c) => (
           <option key={c.id} value={c.id}>
             {c.name}
-            {c.last4 ? ` (${c.last4})` : ""}
+            {c.card_prefix ? ` (${c.card_prefix}…)` : ""}
           </option>
         ))}
       </select>

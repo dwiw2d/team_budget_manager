@@ -45,7 +45,7 @@ export default function Home() {
             <li key={c.id} className="flex items-center justify-between py-3">
               <span>
                 {c.name}
-                {c.last4 && <span className="ml-2 text-sm text-slate-500">•{c.last4}</span>}
+                {c.card_prefix && <span className="ml-2 text-sm text-slate-500">{c.card_prefix}…</span>}
               </span>
               <span className={`font-semibold ${c.balance < 0 ? "text-red-600" : ""}`}>
                 {formatWon(c.balance)}

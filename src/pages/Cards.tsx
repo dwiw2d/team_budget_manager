@@ -16,7 +16,7 @@ interface Editing {
   id?: string;
   name: string;
   initial: string;
-  last4: string;
+  prefix: string;
 }
 
 function Row({ k, v, danger }: { k: string; v: string; danger?: boolean }) {
@@ -68,8 +68,9 @@ export default function Cards() {
     const name = editing.name.trim();
     if (!name) return setError("이름을 입력하세요");
     if (!/^\d+$/.test(editing.initial)) return setError("초기 잔액은 0 이상의 정수여야 합니다");
-    if (editing.last4 && !/^\d{4}$/.test(editing.last4)) return setError("뒤 4자리는 숫자 4자리여야 합니다");
-    const c = { name, initial_balance: Number(editing.initial), last4: editing.last4 || null };
+    if (editing.prefix && !/^\d{6,8}$/.test(editing.prefix))
+      return setError("카드번호 앞자리는 숫자 6~8자리여야 합니다");
+    const c = { name, initial_balance: Number(editing.initial), card_prefix: editing.prefix || null };
     const id = editing.id;
     if (await run(() => (id ? updateCard(id, c) : insertCard(c)))) setEditing(null);
   }
@@ -90,7 +91,7 @@ export default function Cards() {
   function edit(c: CardBalance) {
     closeSheet();
     setError("");
-    setEditing({ id: c.id, name: c.name, initial: String(c.initial_balance), last4: c.last4 ?? "" });
+    setEditing({ id: c.id, name: c.name, initial: String(c.initial_balance), prefix: c.card_prefix ?? "" });
   }
 
   async function remove(c: CardBalance) {
@@ -105,7 +106,7 @@ export default function Cards() {
           type="button"
           className={btnSecondary}
           disabled={busy}
-          onClick={() => { setError(""); setEditing({ name: "", initial: "", last4: "" }); }}
+          onClick={() => { setError(""); setEditing({ name: "", initial: "", prefix: "" }); }}
         >
           카드 추가
         </button>
@@ -155,15 +156,18 @@ export default function Cards() {
             />
           </label>
           <label className="block">
-            <span className={label}>카드번호 뒤 4자리(선택)</span>
+            <span className={label}>카드번호 앞 6~8자리(선택)</span>
             <input
               className={input}
               inputMode="numeric"
-              pattern="[0-9]{4}"
-              maxLength={4}
-              value={editing.last4}
-              onChange={(e) => setEditing({ ...editing, last4: e.target.value.replace(/\D/g, "") })}
+              pattern="[0-9]{6,8}"
+              maxLength={8}
+              value={editing.prefix}
+              onChange={(e) => setEditing({ ...editing, prefix: e.target.value.replace(/\D/g, "") })}
             />
+            <span className="mt-1 block text-xs text-slate-500">
+              영수증은 뒤 4자리를 가리므로 앞자리로 맞춥니다
+            </span>
           </label>
           {error && <p className="text-sm text-red-600">{error}</p>}
           <div className="flex gap-2">
@@ -198,7 +202,7 @@ export default function Cards() {
             </div>
             <dl className="mb-4 space-y-2 text-sm">
               <Row k="이름" v={selected.name} />
-              <Row k="카드번호 뒤 4자리" v={selected.last4 ?? "-"} />
+              <Row k="카드번호 앞자리" v={selected.card_prefix ?? "-"} />
               <Row k="초기 잔액" v={formatWon(selected.initial_balance)} />
               <Row k="잔액" v={formatWon(selected.balance)} danger={selected.balance < 0} />
               <Row k="마지막 초기화" v={selected.reset_at ? formatKst(selected.reset_at) : "초기화 전"} />
@@ -238,7 +242,9 @@ export default function Cards() {
                   <span>
                     <span className="block font-semibold text-slate-900">
                       {c.name}
-                      {c.last4 && <span className="ml-2 text-sm font-normal text-slate-500">•{c.last4}</span>}
+                      {c.card_prefix && (
+                        <span className="ml-2 text-sm font-normal text-slate-500">{c.card_prefix}…</span>
+                      )}
                     </span>
                     <span className="block text-sm text-slate-500">초기 잔액 {formatWon(c.initial_balance)}</span>
                     <span className="block text-sm text-slate-500">
