@@ -1,14 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { btnDanger, btnPrimary, btnSecondary, btnText, h1, input, label } from "../components/ui";
-import { formatKst } from "../lib/dates";
-import {
-  deleteCard,
-  insertCard,
-  listCardBalances,
-  resetAllCards,
-  resetCard,
-  updateCard,
-} from "../lib/db";
+import { deleteCard, insertCard, listCardBalances, updateCard } from "../lib/db";
 import { formatWon } from "../lib/money";
 import type { CardBalance } from "../lib/types";
 
@@ -75,15 +67,6 @@ export default function Cards() {
     if (await run(() => (id ? updateCard(id, c) : insertCard(c)))) setEditing(null);
   }
 
-  /** 확인창 한 번으로 즉시 초기화한다. 기준은 누른 그 시각. */
-  async function reset(c: CardBalance) {
-    if (window.confirm(`'${c.name}' 잔액을 초기화할까요?`) && (await run(() => resetCard(c.id)))) closeSheet();
-  }
-
-  async function resetAll() {
-    if (window.confirm("모든 카드의 잔액을 초기화할까요?")) await run(() => resetAllCards());
-  }
-
   function closeSheet() {
     setSelectedId(null);
   }
@@ -101,22 +84,14 @@ export default function Cards() {
   return (
     <>
       <h1 className={h1}>카드</h1>
-      <div className="mb-4 grid grid-cols-2 gap-3">
+      <div className="mb-4">
         <button
           type="button"
-          className={btnSecondary}
+          className={`${btnSecondary} w-full`}
           disabled={busy}
           onClick={() => { setError(""); setEditing({ name: "", initial: "", prefix: "" }); }}
         >
           카드 추가
-        </button>
-        <button
-          type="button"
-          className={btnSecondary}
-          disabled={busy || !cards?.length}
-          onClick={resetAll}
-        >
-          모든 카드 초기화
         </button>
       </div>
 
@@ -154,6 +129,9 @@ export default function Cards() {
               onChange={(e) => setEditing({ ...editing, initial: e.target.value.replace(/\D/g, "") })}
               required
             />
+            <span className="mt-1 block text-xs text-slate-500">
+              초기 잔액을 바꾸면 다음 달 1일부터 적용됩니다
+            </span>
           </label>
           <label className="block">
             <span className={label}>카드번호 앞 6~8자리(선택)</span>
@@ -204,16 +182,13 @@ export default function Cards() {
               <Row k="이름" v={selected.name} />
               <Row k="카드번호 앞자리" v={selected.card_prefix ?? "-"} />
               <Row k="초기 잔액" v={formatWon(selected.initial_balance)} />
+              <p className="text-xs text-slate-500">초기 잔액을 바꾸면 다음 달 1일부터 적용됩니다</p>
               <Row k="잔액" v={formatWon(selected.balance)} danger={selected.balance < 0} />
-              <Row k="마지막 초기화" v={selected.reset_at ? formatKst(selected.reset_at) : "초기화 전"} />
             </dl>
             {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 gap-2">
               <button type="button" className={btnSecondary} disabled={busy} onClick={() => edit(selected)}>
                 수정
-              </button>
-              <button type="button" className={btnSecondary} disabled={busy} onClick={() => reset(selected)}>
-                초기화
               </button>
               <button type="button" className={btnDanger} disabled={busy} onClick={() => remove(selected)}>
                 삭제
@@ -247,9 +222,6 @@ export default function Cards() {
                       )}
                     </span>
                     <span className="block text-sm text-slate-500">초기 잔액 {formatWon(c.initial_balance)}</span>
-                    <span className="block text-sm text-slate-500">
-                      {c.reset_at ? `마지막 초기화 ${formatKst(c.reset_at)}` : "초기화 전"}
-                    </span>
                   </span>
                   <span className={`text-lg font-bold ${c.balance < 0 ? "text-red-600" : "text-slate-900"}`}>
                     {formatWon(c.balance)}
