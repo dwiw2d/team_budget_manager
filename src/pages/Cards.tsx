@@ -129,7 +129,7 @@ export default function Cards() {
               onChange={(e) => setEditing({ ...editing, initial: e.target.value.replace(/\D/g, "") })}
               required
             />
-            <span className="mt-1 block text-right text-xs text-slate-500">
+            <span className="mt-1 block text-xs text-slate-500">
               예산을 바꾸면 다음 달 1일부터 적용됩니다
             </span>
           </label>
