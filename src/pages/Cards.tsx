@@ -59,7 +59,7 @@ export default function Cards() {
     if (!editing) return;
     const name = editing.name.trim();
     if (!name) return setError("이름을 입력하세요");
-    if (!/^\d+$/.test(editing.initial)) return setError("초기 잔액은 0 이상의 정수여야 합니다");
+    if (!/^\d+$/.test(editing.initial)) return setError("예산은 0 이상의 정수여야 합니다");
     if (editing.prefix && !/^\d{6,8}$/.test(editing.prefix))
       return setError("카드번호 앞자리는 숫자 6~8자리여야 합니다");
     const c = { name, initial_balance: Number(editing.initial), card_prefix: editing.prefix || null };
@@ -120,7 +120,7 @@ export default function Cards() {
             />
           </label>
           <label className="block">
-            <span className={label}>초기 잔액(원)</span>
+            <span className={label}>예산(원)</span>
             <input
               className={input}
               inputMode="numeric"
@@ -129,8 +129,8 @@ export default function Cards() {
               onChange={(e) => setEditing({ ...editing, initial: e.target.value.replace(/\D/g, "") })}
               required
             />
-            <span className="mt-1 block text-xs text-slate-500">
-              초기 잔액을 바꾸면 다음 달 1일부터 적용됩니다
+            <span className="mt-1 block text-right text-xs text-slate-500">
+              예산을 바꾸면 다음 달 1일부터 적용됩니다
             </span>
           </label>
           <label className="block">
@@ -181,8 +181,8 @@ export default function Cards() {
             <dl className="mb-4 space-y-2 text-sm">
               <Row k="이름" v={selected.name} />
               <Row k="카드번호 앞자리" v={selected.card_prefix ?? "-"} />
-              <Row k="초기 잔액" v={formatWon(selected.initial_balance)} />
-              <p className="text-xs text-slate-500">초기 잔액을 바꾸면 다음 달 1일부터 적용됩니다</p>
+              <Row k="예산" v={formatWon(selected.initial_balance)} />
+              <p className="text-right text-xs text-slate-500">예산을 바꾸면 다음 달 1일부터 적용됩니다</p>
               <Row k="잔액" v={formatWon(selected.balance)} danger={selected.balance < 0} />
             </dl>
             {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
@@ -221,7 +221,7 @@ export default function Cards() {
                         <span className="ml-2 text-sm font-normal text-slate-500">{c.card_prefix}…</span>
                       )}
                     </span>
-                    <span className="block text-sm text-slate-500">초기 잔액 {formatWon(c.initial_balance)}</span>
+                    <span className="block text-sm text-slate-500">예산 {formatWon(c.initial_balance)}</span>
                   </span>
                   <span className={`text-lg font-bold ${c.balance < 0 ? "text-red-600" : "text-slate-900"}`}>
                     {formatWon(c.balance)}
