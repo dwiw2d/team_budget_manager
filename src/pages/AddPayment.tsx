@@ -43,7 +43,7 @@ const blank = (): Form => ({
 export default function AddPayment() {
   const navigate = useNavigate();
   const [cards, setCards] = useState<CardBalance[]>([]);
-  // undefined = 아직 "영수증 촬영"/"직접 입력" 을 고르기 전
+  // undefined = 아직 "영수증 입력"/"직접 입력" 을 고르기 전
   const [form, setForm] = useState<Form>();
   const [reading, setReading] = useState(false);
   const [notice, setNotice] = useState("");
@@ -139,11 +139,10 @@ export default function AddPayment() {
       <h1 className={h1}>결제 추가</h1>
       <div className="mb-4 grid grid-cols-2 gap-3">
         <label className={`${btnSecondary} flex cursor-pointer items-center justify-center`}>
-          영수증 촬영
+          영수증 입력
           <input
             type="file"
             accept="image/*"
-            capture="environment"
             className="sr-only"
             onChange={onPhoto}
             disabled={reading}
