@@ -1,0 +1,131 @@
+import { describe, expect, it } from "vitest";
+import { extract, linesFromFields } from "./clova-general.ts";
+import { receipt1Fields, receipt2Fields } from "./clova-general.fixtures.ts";
+
+describe("extract", () => {
+  it("receipt-1: KIS VAN 승인전표에서 네 필드를 뽑는다", () => {
+    expect(extract(receipt1Fields)).toEqual({
+      merchant: "동남집",
+      paidAt: "2026-09-04T12:06:09+09:00",
+      amount: 59000,
+      cardNumber: "4265-86**-****-****",
+      weak: [],
+    });
+  });
+
+  it("receipt-2: POS 카드판매 영수증에서 네 필드를 뽑는다", () => {
+    expect(extract(receipt2Fields)).toEqual({
+      merchant: "세상끝의라멘",
+      paidAt: "2026-09-15T12:38:27+09:00",
+      amount: 36000,
+      cardNumber: "42658698********",
+      weak: [],
+    });
+  });
+
+  it("금액 함정: 공급가/부가세/단가/품목합계를 총액으로 고르지 않는다", () => {
+    for (const trap of [53636, 5364]) expect(extract(receipt1Fields).amount).not.toBe(trap);
+    for (const trap of [32727, 3273, 11000, 33000]) expect(extract(receipt2Fields).amount).not.toBe(trap);
+  });
+
+  it("가맹점 함정: 안내 문구·표 머리글·VAN사·카드사 이름을 상호로 고르지 않는다", () => {
+    const picked = [extract(receipt1Fields).merchant, extract(receipt2Fields).merchant];
+    for (const trap of ["주소가 실제와 다른경우", "테이블명: 1T", "KIS정보통신", "KB국민카드"]) {
+      expect(picked).not.toContain(trap);
+    }
+  });
+
+  it("시각 함정: 조각으로 쪼개진 판매시간을 자정으로 뭉개지 않는다", () => {
+    // "판매시간:" "20260915" "12:38:" "27" 이 네 조각이다. 날짜만 읽고 끝내면 00:00:00 이 된다.
+    expect(extract(receipt2Fields).paidAt?.endsWith("T00:00:00+09:00")).toBe(false);
+  });
+
+  it("카드번호 함정: 사업자번호·VANKEY·전표일련번호를 카드번호로 고르지 않는다", () => {
+    expect(extract(receipt1Fields).cardNumber).not.toBe("1122334455667788");
+    expect(extract(receipt2Fields).cardNumber).not.toBe("123-45-67890");
+    expect(extract(receipt2Fields).cardNumber).not.toBe("2026091599999999");
+  });
+
+  it("두 영수증 모두 카드번호 뒤 4자리가 마스킹돼 있다", () => {
+    // 카드 자동 선택이 뒤 4자리를 쓸 수 없는 이유다(스펙 §6-3: 앞자리로 맞춘다).
+    for (const fields of [receipt1Fields, receipt2Fields]) {
+      expect(extract(fields).cardNumber?.endsWith("****")).toBe(true);
+    }
+  });
+
+  it("읽을 수 없으면 그 항목만 null 이고 weak 에 이름이 남는다", () => {
+    expect(extract([])).toEqual({
+      merchant: null,
+      paidAt: null,
+      amount: null,
+      cardNumber: null,
+      weak: ["merchant", "amount", "paidAt"],
+    });
+  });
+
+  it("상호를 못 찾으면 억지로 고르지 않고 null 과 weak 를 준다", () => {
+    const noMerchant = receipt2Fields.filter((f) => f.inferText !== "세상끝의라멘");
+    expect(extract(noMerchant).merchant).toBeNull();
+    expect(extract(noMerchant).weak).toEqual(["merchant"]);
+    expect(extract(noMerchant).amount).toBe(36000); // 나머지 필드는 그대로 나온다
+  });
+});
+
+describe("weak", () => {
+  it("합계·총액 같은 낱말 없이 가장 큰 숫자로 고른 금액은 확신하지 않는다", () => {
+    const noKeyword = [line("아메리카노 4,500", 0), line("케이크 7,000", 40)];
+    expect(extract(noKeyword).amount).toBe(7000); // 최댓값 규칙으로 떨어진다
+    expect(extract(noKeyword).weak).toContain("amount");
+  });
+
+  it("합계 줄에서 고른 금액은 확신한다", () => {
+    const keyed = [line("아메리카노 4,500", 0), line("합계: 4,500원", 40)];
+    expect(extract(keyed).amount).toBe(4500);
+    expect(extract(keyed).weak).not.toContain("amount");
+  });
+
+  it("시각을 못 찾아 자정으로 채우면 확신하지 않는다", () => {
+    const dateOnly = [line("거래일시: 2026-09-04", 0)];
+    expect(extract(dateOnly).paidAt).toBe("2026-09-04T00:00:00+09:00");
+    expect(extract(dateOnly).weak).toContain("paidAt");
+  });
+
+  it("카드번호가 없어도 weak 에 넣지 않는다", () => {
+    expect(extract(receipt1Fields).weak).not.toContain("cardNumber");
+    expect(extract([]).weak).not.toContain("cardNumber");
+  });
+});
+
+describe("linesFromFields", () => {
+  it("좌우로 갈라진 라벨과 값을 한 줄로 합친다", () => {
+    // 실제 응답은 "합계:" 와 "59,000원" 이 서로 다른 lineBreak 묶음으로 떨어져 나온다.
+    const texts = linesFromFields(receipt1Fields).map((l) => l.text);
+    expect(texts).toContain("합계: 59,000원");
+    expect(texts).toContain("홍길동 (TEL: 0212341234) 동남집");
+    expect(texts).toHaveLength(20);
+  });
+
+  it("나오는 순서가 뒤엉켜도 세로 중심으로 줄을 맞춘다", () => {
+    // receipt-2 는 "공급가"(56번째 조각)와 그 값 "32,727"(76번째)이 멀찍이 떨어져 나온다.
+    const texts = linesFromFields(receipt2Fields).map((l) => l.text);
+    expect(texts).toContain("공급가 32,727");
+    expect(texts).toContain("판매시간: 20260915 12:38: 27 (POS100)");
+    expect(texts).toHaveLength(25);
+  });
+});
+
+/** 한 줄짜리 가짜 조각. weak 규칙만 보려고 최소한으로 만든다. */
+function line(text: string, top: number) {
+  return {
+    inferText: text,
+    lineBreak: true,
+    boundingPoly: {
+      vertices: [
+        { x: 0, y: top },
+        { x: 400, y: top },
+        { x: 400, y: top + 30 },
+        { x: 0, y: top + 30 },
+      ],
+    },
+  };
+}

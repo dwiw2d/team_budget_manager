@@ -7,7 +7,12 @@
 // 마스킹된 카드번호, 좌표, lineBreak.
 
 /** 응답 조각 하나. quad 는 [[x,y] x4] 로, 실제 응답은 기울어진 사각형이라 그대로 둔다. */
-const f = (inferText, inferConfidence, lineBreak, quad) => ({
+const f = (
+  inferText: string,
+  inferConfidence: number,
+  lineBreak: boolean,
+  quad: Array<[number, number]>,
+) => ({
   valueType: 'ALL',
   boundingPoly: { vertices: quad.map(([x, y]) => ({ x, y })) },
   inferText,
