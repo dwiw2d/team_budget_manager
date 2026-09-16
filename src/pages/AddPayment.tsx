@@ -17,6 +17,19 @@ interface Form {
   source: PaymentSource;
 }
 
+/** 폼 칸을 채운 OCR 필드 이름. 그 칸을 고치면 "확인해 주세요" 표시를 지운다. */
+const OCR_FIELD: Partial<Record<keyof Form, string>> = {
+  cardId: "cardNumber",
+  merchant: "merchant",
+  amount: "amount",
+  paidAt: "paidAt",
+};
+
+/** 확신 없는 칸 아래에 붙는 안내. */
+function Check({ on }: { on: boolean }) {
+  return on ? <span className="mt-1 block text-xs text-amber-600">확인해 주세요</span> : null;
+}
+
 const blank = (): Form => ({
   cardId: "",
   merchant: "",
@@ -36,6 +49,8 @@ export default function AddPayment() {
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  // OCR 이 확신하지 못한 필드 이름들. 사용자가 그 칸을 고치면 빠진다.
+  const [uncertain, setUncertain] = useState<string[]>([]);
   // 스펙 결정 6: 사진 File 은 저장 완료까지 보관한다(나중에 업로드 단계를 끼울 자리).
   const photoRef = useRef<File | null>(null);
 
@@ -47,7 +62,12 @@ export default function AddPayment() {
 
   function set<K extends keyof Form>(key: K, value: Form[K]) {
     setForm((f) => ({ ...(f ?? blank()), [key]: value }));
+    setUncertain((u) => u.filter((field) => field !== OCR_FIELD[key]));
   }
+
+  const shaky = (field: string) => uncertain.includes(field);
+  /** 확신 없는 칸은 테두리를 호박색으로 바꾼다. */
+  const cls = (field: string) => (shaky(field) ? input.replace("border-slate-300", "border-amber-500") : input);
 
   async function onPhoto(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -59,6 +79,7 @@ export default function AddPayment() {
     setReading(true);
     try {
       const r = await recognizeReceipt(file);
+      setUncertain(r.uncertain ?? []);
       setForm({
         ...blank(),
         cardId: autoCardId(cards, r.cardNumber),
@@ -70,6 +91,7 @@ export default function AddPayment() {
       });
     } catch {
       setNotice("영수증을 읽지 못했습니다. 직접 입력해 주세요");
+      setUncertain([]);
       setForm(blank());
     } finally {
       setReading(false);
@@ -78,6 +100,7 @@ export default function AddPayment() {
 
   function startManual() {
     photoRef.current = null;
+    setUncertain([]);
     setNotice("");
     setError("");
     setForm(blank());
@@ -145,7 +168,7 @@ export default function AddPayment() {
           <label className="block">
             <span className={label}>카드</span>
             <select
-              className={input}
+              className={cls("cardNumber")}
               value={form.cardId}
               onChange={(e) => set("cardId", e.target.value)}
               required
@@ -158,37 +181,41 @@ export default function AddPayment() {
                 </option>
               ))}
             </select>
+            <Check on={shaky("cardNumber")} />
           </label>
           <label className="block">
             <span className={label}>가맹점</span>
             <input
-              className={input}
+              className={cls("merchant")}
               value={form.merchant}
               onChange={(e) => set("merchant", e.target.value)}
               maxLength={100}
               required
             />
+            <Check on={shaky("merchant")} />
           </label>
           <label className="block">
             <span className={label}>금액(원)</span>
             <input
-              className={input}
+              className={cls("amount")}
               inputMode="numeric"
               pattern="[0-9]*"
               value={form.amount}
               onChange={(e) => set("amount", e.target.value.replace(/\D/g, ""))}
               required
             />
+            <Check on={shaky("amount")} />
           </label>
           <label className="block">
             <span className={label}>결제 일시</span>
             <input
               type="datetime-local"
-              className={`${input} min-w-0 appearance-none [&::-webkit-date-and-time-value]:text-left`}
+              className={`${cls("paidAt")} min-w-0 appearance-none [&::-webkit-date-and-time-value]:text-left`}
               value={form.paidAt}
               onChange={(e) => set("paidAt", e.target.value)}
               required
             />
+            <Check on={shaky("paidAt")} />
           </label>
           <label className="block">
             <span className={label}>메모(선택)</span>

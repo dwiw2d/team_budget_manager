@@ -7,6 +7,8 @@ export interface OcrResult {
   paidAt: string | null;
   amount: number | null;
   cardNumber: string | null;
+  /** 확신하지 못한 필드 이름들("merchant" | "paidAt" | "amount" | "cardNumber"). 화면이 표시한다. */
+  uncertain: string[];
 }
 
 /** 401/502/503/네트워크 등 OCR 실패. 화면은 "직접 입력" 안내로 처리한다. */
