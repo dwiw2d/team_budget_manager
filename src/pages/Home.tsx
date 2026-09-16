@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import PaymentRow from "../components/PaymentRow";
 import { h2 } from "../components/ui";
-import { listCardBalances, listRecentPayments, purgeOldPayments } from "../lib/db";
+import { listCardBalances, listRecentPayments, purgeOldPayments, rollOverBalances } from "../lib/db";
 import { formatWon } from "../lib/money";
 import type { CardBalance, PaymentWithCard } from "../lib/types";
 
@@ -12,7 +12,8 @@ export default function Home() {
 
   useEffect(() => {
     (async () => {
-      // 3개월 지난 결제 정리. 실패해도 화면은 진행한다.
+      // 잔액 기간이 지난 카드를 먼저 채우고, 그다음 3개월 지난 결제를 정리한다. 실패해도 화면은 진행한다.
+      await rollOverBalances().catch(() => {});
       await purgeOldPayments().catch(() => {});
       try {
         const [c, r] = await Promise.all([listCardBalances(), listRecentPayments(5)]);
