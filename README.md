@@ -1,6 +1,6 @@
 # SW2HW 장부
 
-공용 비밀번호 하나로 여러 사람이 함께 쓰는 모바일 우선 PWA 장부입니다. 카드를 등록해 초기 잔액을 두고, 영수증을 촬영(네이버 CLOVA OCR)하거나 직접 입력해 결제를 기록하면 해당 카드의 잔액이 줄어듭니다. 언제 접속하든 총 잔액, 카드별 잔액, 결제 내역을 볼 수 있습니다. 백엔드는 Supabase(Postgres, Auth, Edge Function), 프런트는 GitHub Pages에 올린 정적 SPA이며 nginx Docker 이미지로도 띄울 수 있습니다.
+공용 PIN 6자리 하나로 여러 사람이 함께 쓰는 모바일 우선 PWA 장부입니다. 카드를 등록해 초기 잔액을 두고, 영수증을 촬영(네이버 CLOVA OCR)하거나 직접 입력해 결제를 기록하면 해당 카드의 잔액이 줄어듭니다. 언제 접속하든 총 잔액, 카드별 잔액, 결제 내역을 볼 수 있습니다. 백엔드는 Supabase(Postgres, Auth, Edge Function), 프런트는 GitHub Pages에 올린 정적 SPA이며 nginx Docker 이미지로도 띄울 수 있습니다.
 
 - 배포 주소: https://dwiw2d.github.io/team_budget_manager/
 - 설계 스펙: `docs/superpowers/specs/2026-09-16-sw2hw-ledger-design.md` (구현 계약서)
@@ -8,7 +8,7 @@
 
 ## 기능 요약
 
-- 비밀번호만 입력해 로그인하며, 틀리면 오류 메시지를 보여 주고 세션은 브라우저에 유지됩니다. 로그인하지 않으면 어떤 경로로 들어와도 로그인 화면으로 보냅니다.
+- PIN 6자리만 입력해 로그인하며(6자리를 채우면 자동으로 로그인을 시도합니다), 틀리면 오류 메시지를 보여 주고 세션은 브라우저에 유지됩니다. 로그인하지 않으면 어떤 경로로 들어와도 로그인 화면으로 보냅니다.
 - 카드를 이름·초기 잔액·뒤 4자리(선택)로 추가·수정·삭제합니다. 결제가 있는 카드는 삭제할 수 없다고 안내합니다.
 - 홈에서 총 잔액(카드 잔액의 합), 카드별 잔액, 최근 결제 5건을 봅니다.
 - 결제를 직접 입력하면 해당 카드 잔액이 즉시 줄어듭니다.
@@ -17,7 +17,7 @@
 - 결제 상세에서는 메모만 수정할 수 있고 다른 필드는 바꿀 수 없습니다. 결제는 삭제할 수 없고 취소만 가능하며, 취소는 확인창을 거치고 되돌릴 수 없습니다. 취소된 결제는 잔액에서 빠지고 취소선으로 표시됩니다.
 - 카드별 또는 모든 카드를 기준일과 함께 초기화하면 잔액이 초기 잔액으로 돌아갑니다. 기준일 이전 결제는 내역에 남지만 잔액에서 제외되고, 초기화 뒤 기준일 이전 날짜로 결제를 넣어도 잔액은 줄지 않습니다.
 - 이번 달 포함 최근 3개월치만 보관하며, 그보다 오래되고 카드 초기화 기준일보다 앞선 결제는 앱 시작 시 정리됩니다.
-- 설정에서 비밀번호를 바꾸면 새 비밀번호로만 로그인됩니다.
+- 설정에서 현재 PIN 을 확인한 뒤 PIN 을 바꾸면 새 PIN 으로만 로그인됩니다.
 - PWA로 설치할 수 있고, 오프라인이면 안내 배너를 보여 줍니다.
 - 데이터 보호는 RLS와 트리거가 맡습니다. 익명 접근은 0건, 로그인 후에도 결제 삭제·금액 수정은 거부됩니다. 공개 회원가입은 막혀 있습니다.
 
@@ -38,7 +38,7 @@ npm run dev
 | `VITE_SUPABASE_URL` | 브라우저가 붙는 Supabase URL |
 | `VITE_SUPABASE_ANON_KEY` | 브라우저용 anon 키 |
 | `APP_OWNER_EMAIL` | 유일한 계정 이메일(`owner@sw2hw.local`) |
-| `APP_OWNER_PASSWORD` | 그 계정의 초기 비밀번호 |
+| `APP_OWNER_PASSWORD` | 그 계정의 초기 PIN 6자리 |
 | `NAVER_OCR_INVOKE_URL` | 네이버 CLOVA OCR 영수증 API 호출 URL |
 | `NAVER_OCR_SECRET` | 네이버 CLOVA OCR 시크릿 |
 
@@ -76,7 +76,7 @@ GitHub 저장소 설정(이미 되어 있음): Pages 소스는 GitHub Actions, �
 
 1. `.env.local`에 `NAVER_OCR_INVOKE_URL`, `NAVER_OCR_SECRET`을 추가한다.
 2. `npm run sb:secrets`로 Edge Function 시크릿을 올린다.
-3. 앱에 로그인한 뒤 설정 화면에서 비밀번호를 바꾼다(권장).
+3. 앱에 로그인한 뒤 설정 화면에서 PIN 6자리를 바꾼다(권장).
 
 ## 자체 호스팅 Supabase로 옮기기
 
@@ -94,13 +94,13 @@ GitHub 저장소 설정(이미 되어 있음): Pages 소스는 GitHub Actions, �
    curl -X POST "http://<host>:8000/auth/v1/admin/users" \
      -H "apikey: $SERVICE_ROLE_KEY" -H "Authorization: Bearer $SERVICE_ROLE_KEY" \
      -H "Content-Type: application/json" \
-     -d '{"email":"owner@sw2hw.local","password":"<초기 비밀번호>","email_confirm":true}'
+     -d '{"email":"owner@sw2hw.local","password":"<초기 PIN 6자리>","email_confirm":true}'
    ```
 6. 프런트 실행: `.env`에 `VITE_SUPABASE_URL=http://<host>:8000`, `VITE_SUPABASE_ANON_KEY=<ANON_KEY>`를 두고 `docker compose up -d --build` → `http://<host>:8080`.
 
-## 비밀번호 복구
+## PIN 복구
 
-앱 밖에서 비밀번호를 잊었을 때 Supabase SQL 편집기(자체 호스팅이면 Studio 또는 psql)에서 실행합니다.
+앱 밖에서 PIN 을 잊었을 때 Supabase SQL 편집기(자체 호스팅이면 Studio 또는 psql)에서 실행합니다. `새비밀번호` 자리에 새 PIN 6자리를 넣습니다.
 
 ```sql
 update auth.users

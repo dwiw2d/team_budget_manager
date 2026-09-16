@@ -1,29 +1,43 @@
 import { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { btnPrimary, btnSecondary, h1, h2, input, label } from "../components/ui";
+import { OWNER_EMAIL, PIN_LENGTH, isPin, onlyDigits } from "../lib/auth";
 import { supabase } from "../lib/supabase";
 
 export default function Settings() {
   const navigate = useNavigate();
-  const [pw, setPw] = useState("");
-  const [pw2, setPw2] = useState("");
+  const [currentPin, setCurrentPin] = useState("");
+  const [pin, setPin] = useState("");
+  const [pin2, setPin2] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  async function changePassword(e: FormEvent) {
+  async function changePin(e: FormEvent) {
     e.preventDefault();
     setMessage("");
     setError("");
-    if (pw.length < 8) return setError("비밀번호는 8자 이상이어야 합니다");
-    if (pw !== pw2) return setError("두 비밀번호가 일치하지 않습니다");
+    if (!isPin(currentPin)) return setError("현재 PIN 6자리를 입력하세요");
+    if (!isPin(pin)) return setError("새 PIN 은 숫자 6자리여야 합니다");
+    if (pin !== pin2) return setError("새 PIN 이 일치하지 않습니다");
+    if (pin === currentPin) return setError("현재 PIN 과 다른 PIN 을 입력하세요");
     setBusy(true);
-    const { error } = await supabase.auth.updateUser({ password: pw });
+    // 같은 계정으로 다시 로그인해 현재 PIN 을 확인한다. 세션만 갱신될 뿐 부작용은 없다.
+    const { error: signInError } = await supabase.auth.signInWithPassword({
+      email: OWNER_EMAIL,
+      password: currentPin,
+    });
+    if (signInError) {
+      setBusy(false);
+      return setError("현재 PIN 이 올바르지 않습니다");
+    }
+    const { error } = await supabase.auth.updateUser({ password: pin });
     setBusy(false);
     if (error) return setError(error.message);
-    setPw("");
-    setPw2("");
-    setMessage("비밀번호를 변경했습니다");
+    setCurrentPin("");
+    setPin("");
+    setPin2("");
+    setMessage("PIN 을 변경했습니다");
   }
 
   async function logout() {
@@ -35,34 +49,54 @@ export default function Settings() {
     <>
       <h1 className={h1}>설정</h1>
 
-      <h2 className={h2}>비밀번호 변경</h2>
-      <form onSubmit={changePassword} className="mb-8 space-y-3">
+      <h2 className={h2}>PIN 변경</h2>
+      <form onSubmit={changePin} className="mb-8 space-y-3">
         <label className="block">
-          <span className={label}>새 비밀번호(8자 이상)</span>
+          <span className={label}>현재 PIN</span>
           <input
             type="password"
+            inputMode="numeric"
+            pattern="[0-9]*"
+            maxLength={PIN_LENGTH}
             className={input}
-            autoComplete="new-password"
-            value={pw}
-            onChange={(e) => setPw(e.target.value)}
+            autoComplete="current-password"
+            value={currentPin}
+            onChange={(e) => setCurrentPin(onlyDigits(e.target.value))}
             required
           />
         </label>
         <label className="block">
-          <span className={label}>새 비밀번호 확인</span>
+          <span className={label}>새 PIN</span>
           <input
             type="password"
+            inputMode="numeric"
+            pattern="[0-9]*"
+            maxLength={PIN_LENGTH}
             className={input}
             autoComplete="new-password"
-            value={pw2}
-            onChange={(e) => setPw2(e.target.value)}
+            value={pin}
+            onChange={(e) => setPin(onlyDigits(e.target.value))}
+            required
+          />
+        </label>
+        <label className="block">
+          <span className={label}>새 PIN 확인</span>
+          <input
+            type="password"
+            inputMode="numeric"
+            pattern="[0-9]*"
+            maxLength={PIN_LENGTH}
+            className={input}
+            autoComplete="new-password"
+            value={pin2}
+            onChange={(e) => setPin2(onlyDigits(e.target.value))}
             required
           />
         </label>
         {error && <p className="text-sm text-red-600">{error}</p>}
         {message && <p className="text-sm text-green-700">{message}</p>}
         <button type="submit" className={btnPrimary} disabled={busy}>
-          {busy ? "변경 중…" : "비밀번호 변경"}
+          {busy ? "변경 중…" : "PIN 변경"}
         </button>
       </form>
 
