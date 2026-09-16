@@ -1,15 +1,18 @@
 // CLOVA General OCR 응답 -> { merchant, paidAt, amount, cardNumber } 순수 변환.
 // 네트워크 없음. 입력은 응답의 images[0].fields 배열.
 //
-// 확인한 응답 규격 (2026-09-16 확인):
+// 확인한 응답 규격 (2026-09-16 실제 응답으로 확인):
 //   https://api.ncloud-docs.com/docs/ai-application-service-ocr-ocr
 //   fields[].inferText        인식한 글자
 //   fields[].inferConfidence  0~1
 //   fields[].type             NORMAL | MULTI_BOX | CHECKBOX
 //   fields[].lineBreak        이 조각이 한 줄의 마지막이면 true
-//   fields[].boundingPoly.vertices  [{x,y} x4]
-// 미확인: fields 의 정렬 순서가 항상 읽는 순서라고 보장하는 문구는 못 찾았다.
-//         그래서 lineBreak 뿐 아니라 세로 중심 좌표로도 줄을 끊는다.
+//   fields[].boundingPoly.vertices  [{x,y} x4] — 기울어진 사각형이라 축 정렬이 아니다
+//
+// 실제 응답에서 배운 것: lineBreak 는 "사람이 보는 한 줄"이 아니라 CLOVA 가 한 번에 읽은
+// 조각 묶음이다. 영수증처럼 좌우로 나뉜 표는 라벨("합계:")과 값("59,000원")이 서로 다른
+// lineBreak 묶음으로 떨어져 나오고, 묶음이 나오는 순서도 위->아래가 아니다.
+// 그래서 lineBreak 묶음을 세로 중심으로 다시 정렬해 겹치는 것끼리 한 줄로 합친다.
 
 const KRW = /\d{1,3}(?:,\d{3})+|\d+/g;
 
@@ -23,18 +26,22 @@ const DATE_LABELS = ['거래일시', '승인일시', '판매시간', '거래일�
 // 카드번호를 찾으면 안 되는 줄
 const NOT_CARD = /사업자|TEL|전화|승인번호|VANKEY|가맹점번호|영수번호|일련번호/i;
 
-// 가맹점이 될 수 없는 말 (VAN사 / 카드사 / 말머리)
-const NOT_MERCHANT = [
-  'KIS정보통신', '키스', '나이스', 'NICE', 'KICC', '스마트로', '한국정보통신', 'KSNET', 'KOVAN',
+// 상호가 될 수 없는 줄. 실제 영수증 두 장에서 파서를 속인 말들이 앞쪽에 있다.
+//   - VAN사 안내 문구: "가맹점명/주소가 실제와 다른경우 신고안내(포상금 10만원 지급)"
+//   - POS 표 머리글: "테이블명: 1T", "상품 단가 수량 금액"
+const MERCHANT_BAD = new RegExp([
+  '신고안내', '포상금', '여신금융협회', '가맹점명\\s*/', '주소가', '실제와\\s*다른',
+  'KIS정보통신', '한국정보통신', '나이스', 'NICE', 'KICC', 'KSNET', 'KOVAN', '스마트로', '키스',
   '국민카드', '신한카드', '삼성카드', '현대카드', '롯데카드', '하나카드', 'BC카드', '비씨카드',
-  '농협카드', '우리카드', '카카오뱅크', '여신금융협회',
-  '승인', '영수증', '전표', '고객용', '회원용', '가맹점용', '카드판매', '매출',
-];
-// 가맹점 후보에서 뺄 구조적인 줄
-const MERCHANT_SKIP = /사업자|대표자|TEL|전화|주소|가맹점|합계|금액|부가세|공급가|카드|할부|TID|일시|시간|POS|\d{3}/i;
+  '농협카드', '우리카드', '카카오뱅크',
+  '테이블명', '판매사원', '영수번호', '상품', '단가', '수량', '금액', '품명',
+  '사업자', '대표자', 'TEL', '전화', '주소', '합계', '부가세', '공급가', '카드', '할부', 'TID',
+  'VANKEY', '일시', '시간', 'POS', '승인', '매출', '영수증', '전표', '고객용', '회원용', '알림',
+].join('|'), 'i');
 const ADDRESS = /^(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)/;
 
 const squash = (s) => s.replace(/\s+/g, '');
+const pad = (n) => String(n).padStart(2, '0');
 
 function box(field) {
   const vs = field.boundingPoly?.vertices ?? [];
@@ -47,31 +54,45 @@ function box(field) {
 
 /** 글자 조각 배열을 사람이 읽는 줄로 복원한다. */
 export function linesFromFields(fields) {
-  const words = (fields ?? []).map((f) => ({ text: f.inferText ?? '', lineBreak: !!f.lineBreak, ...box(f) }));
-  const lines = [];
+  // 1) lineBreak 묶음 = CLOVA 가 한 번에 읽은 조각들. 이건 쪼개지 않는다.
+  const chunks = [];
   let cur = [];
-  for (const w of words) {
-    const prev = cur[cur.length - 1];
-    // lineBreak 가 빠졌어도 세로 중심이 글자 높이의 60% 넘게 벌어지면 새 줄로 본다.
-    if (prev && Math.abs(w.mid - prev.mid) > Math.max(prev.height, w.height) * 0.6) {
-      lines.push(cur);
-      cur = [];
-    }
-    cur.push(w);
-    if (w.lineBreak) {
-      lines.push(cur);
+  for (const f of fields ?? []) {
+    cur.push({ text: f.inferText ?? '', ...box(f) });
+    if (f.lineBreak) {
+      chunks.push(cur);
       cur = [];
     }
   }
-  if (cur.length) lines.push(cur);
+  if (cur.length) chunks.push(cur);
 
-  return lines.map((ws) => {
-    const sorted = [...ws].sort((a, b) => a.left - b.left);
+  // 2) 묶음을 세로 중심으로 정렬해, 중심이 글자 높이 절반 안에 드는 것끼리 한 줄로 합친다.
+  const sorted = chunks
+    .map((ws) => ({
+      words: ws,
+      mid: ws.reduce((s, w) => s + w.mid, 0) / ws.length,
+      height: Math.max(...ws.map((w) => w.height)),
+    }))
+    .sort((a, b) => a.mid - b.mid);
+
+  const rows = [];
+  for (const chunk of sorted) {
+    const row = rows[rows.length - 1];
+    if (row && chunk.mid - row.mid <= Math.max(row.height, chunk.height) * 0.45) {
+      row.words.push(...chunk.words);
+      row.height = Math.max(row.height, chunk.height);
+    } else {
+      rows.push({ words: [...chunk.words], mid: chunk.mid, height: chunk.height });
+    }
+  }
+
+  return rows.map((r) => {
+    const words = r.words.sort((a, b) => a.left - b.left);
     return {
-      text: sorted.map((w) => w.text).join(' '),
-      words: sorted,
-      top: Math.min(...sorted.map((w) => w.top)),
-      height: Math.max(...sorted.map((w) => w.height)),
+      text: words.map((w) => w.text).join(' '),
+      words,
+      top: Math.min(...words.map((w) => w.top)),
+      height: r.height,
     };
   });
 }
@@ -113,34 +134,43 @@ function findAmount(lines) {
   return best;
 }
 
-const pad = (n) => String(n).padStart(2, '0');
-
+/** 줄에서 날짜만 찾아 YYYY-MM-DD 로. 시각은 따로 찾는다(다른 조각으로 쪼개져 나오기 때문). */
 function parseDate(text) {
   const forms = [
-    // YYYY-MM-DD / YYYY.MM.DD / YYYY/MM/DD
-    /(\d{4})[-.\/](\d{1,2})[-.\/](\d{1,2})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/,
-    // YYYYMMDD
-    /(?<!\d)(\d{4})(\d{2})(\d{2})(?!\d)(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/,
-    // YY/MM/DD / YY-MM-DD / YY.MM.DD  -> 2000 년대
-    /(?<!\d)(\d{2})[-.\/](\d{2})[-.\/](\d{2})(?!\d)(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/,
+    /(?<!\d)(\d{4})[-.\/](\d{1,2})[-.\/](\d{1,2})(?!\d)/, // 2026-09-15
+    /(?<!\d)(\d{4})(\d{2})(\d{2})(?!\d)/, // 20260915
+    /(?<!\d)(\d{2})[-.\/](\d{2})[-.\/](\d{2})(?!\d)/, // 26/09/04
   ];
   for (const re of forms) {
     const m = text.match(re);
     if (!m) continue;
-    let [, y, mo, d, hh = '0', mm = '0', ss = '0'] = m;
-    const year = y.length === 2 ? 2000 + Number(y) : Number(y);
+    const [, y, mo, d] = m;
     if (Number(mo) < 1 || Number(mo) > 12 || Number(d) < 1 || Number(d) > 31) continue;
-    if (Number(hh) > 23 || Number(mm) > 59 || Number(ss) > 59) continue;
-    return `${year}-${pad(Number(mo))}-${pad(Number(d))}T${pad(Number(hh))}:${pad(Number(mm))}:${pad(Number(ss))}+09:00`;
+    return `${y.length === 2 ? 2000 + Number(y) : Number(y)}-${pad(Number(mo))}-${pad(Number(d))}`;
   }
   return null;
 }
 
+// "12:38:31" 도 "12:38: 27" 도 받는다. 뒤쪽은 "12:38:" 과 "27" 이 다른 조각으로 나뉜 경우다.
+const TIME = /(?<!\d)([01]?\d|2[0-3])\s*:\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?(?!\d)/;
+
+function parseTime(text) {
+  const m = text?.match(TIME);
+  return m ? `${pad(Number(m[1]))}:${m[2]}:${m[3] ?? '00'}` : null;
+}
+
 function findPaidAt(lines) {
-  const labelled = lines.filter((l) => DATE_LABELS.some((k) => squash(l.text).includes(k)));
-  for (const l of [...labelled, ...lines]) {
-    const hit = parseDate(l.text);
-    if (hit) return hit;
+  const labelled = [];
+  const rest = [];
+  lines.forEach((l, i) => (DATE_LABELS.some((k) => squash(l.text).includes(k)) ? labelled : rest).push(i));
+
+  for (const i of [...labelled, ...rest]) {
+    const date = parseDate(lines[i].text);
+    if (!date) continue;
+    // 날짜를 찾은 줄에 시각이 없으면 이웃 줄까지 본다. 그래도 없을 때만 자정으로 둔다.
+    const time =
+      parseTime(lines[i].text) ?? parseTime(lines[i + 1]?.text) ?? parseTime(lines[i - 1]?.text) ?? '00:00:00';
+    return `${date}T${time}+09:00`;
   }
   return null;
 }
@@ -162,35 +192,41 @@ function findCardNumber(lines) {
   return best;
 }
 
+/** 상호로 쓸 만한 글자인지. 아니면 비워 두는 편이 낫다. */
+function merchantOk(text) {
+  const v = text.trim();
+  if (v.length < 2 || v.length > 20) return false;
+  if (/[[\]]/.test(v)) return false; // "[고객용]" 같은 말머리
+  if (/\d{3}/.test(v)) return false; // 번호·금액이 섞인 줄
+  if ((v.match(/[가-힣A-Za-z]/g) ?? []).length < 2) return false;
+  return !ADDRESS.test(v) && !MERCHANT_BAD.test(v);
+}
+
 function findMerchant(lines) {
-  // (a) "가맹점명" / "상호" 라벨 뒤 값
+  // (a) "상호:" / "가맹점명:" 라벨 값. 콜론이 있어야 한다 — 콜론을 안 따지면 VAN 안내 문구
+  //     "가맹점명/주소가 실제와 다른경우" 가 통째로 상호로 잡힌다.
   for (const l of lines) {
-    const m = l.text.match(/(?:가맹점명|상\s*호)\s*[:：]?\s*(.+)$/);
-    if (!m) continue;
-    const v = m[1].trim().replace(/^[\/:：]+/, '').trim();
-    if (v && v.length <= 20 && !NOT_MERCHANT.some((k) => v.includes(k))) return v;
+    const m = l.text.match(/(?:가맹점\s*명|상\s*호)\s*[:：]\s*(.+)$/);
+    if (m && merchantOk(m[1])) return m[1].trim();
   }
 
-  // (b) 상단 1/3 안에서 본문보다 글자가 큰 줄
-  const tops = lines.map((l) => l.top);
-  const cut = Math.min(...tops) + (Math.max(...tops) - Math.min(...tops)) / 3;
-  const heights = [...lines.map((l) => l.height)].sort((a, b) => a - b);
-  const median = heights[Math.floor(heights.length / 2)];
-  const big = lines
-    .filter((l) => l.top <= cut && l.height > median)
-    .filter((l) => !MERCHANT_SKIP.test(l.text) && !ADDRESS.test(l.text.trim()))
-    .filter((l) => !NOT_MERCHANT.some((k) => l.text.includes(k)))
-    .sort((a, b) => b.height - a.height);
-  if (big.length) return big[0].text.trim();
-
-  // (c) 대표자/TEL 줄의 오른쪽 끝 토막 (receipt-1 의 "손석민 (TEL:...)   동남집" 배치)
+  // (b) 대표자/TEL 이 있는 줄의 오른쪽 끝 토막. 위쪽이 VAN 안내 문구로 덮인 카드 승인전표는
+  //     상호가 "홍길동 (TEL:...)        동남집" 처럼 여기에만 찍힌다.
+  //     가로로 확 떨어져 있어야(빈칸 두 글자 이상) 오른쪽 단으로 본다.
   for (const l of lines) {
     if (!/대표자|TEL|전화/i.test(l.text)) continue;
-    const last = l.words[l.words.length - 1]?.text?.trim();
-    if (last && /^[가-힣]{2,12}$/.test(last) && !NOT_MERCHANT.some((k) => last.includes(k))) return last;
+    const last = l.words[l.words.length - 1];
+    const prev = l.words[l.words.length - 2];
+    if (!last || !prev || last.left - prev.right < last.height * 2) continue;
+    if (last.text === l.text.match(/대표자\s*[:：]?\s*(\S+)/)?.[1]) continue; // 대표자 이름은 상호가 아니다
+    if (merchantOk(last.text)) return last.text.trim();
   }
 
-  return null;
+  // (c) 사업자번호 줄 바로 위 줄. POS 영수증은 제목 / 상호 / 사업자번호 순서로 찍힌다.
+  const i = lines.findIndex((l) => squash(l.text).includes('사업자번호'));
+  if (i > 0 && merchantOk(lines[i - 1].text)) return lines[i - 1].text.trim();
+
+  return null; // 확신이 없으면 비워 둔다. 사용자가 폼에서 채운다.
 }
 
 /** fields -> { merchant, paidAt, amount, cardNumber }. 확신 없으면 그 항목만 null. */

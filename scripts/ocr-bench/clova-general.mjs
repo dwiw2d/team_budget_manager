@@ -5,7 +5,7 @@
 //
 // 요청/응답 규격 (2026-09-16 확인):
 //   https://api.ncloud-docs.com/docs/ai-application-service-ocr-ocr
-//   POST <Invoke URL>/general
+//   POST <Invoke URL>   (콘솔의 Invoke URL 이 이미 /general 로 끝난다)
 //   헤더  X-OCR-SECRET: <Secret Key>, Content-Type: application/json
 //   본문  { version: "V2", requestId, timestamp, lang: "ko",
 //           images: [{ format, name, data(base64) }] }
@@ -47,8 +47,10 @@ try {
   die(1, `이미지를 읽지 못했다: ${e.message}`);
 }
 
+// 콘솔이 알려주는 Invoke URL 은 이미 "/general" 로 끝난다. 그대로 넣어도 되게 받는다.
 const url = process.env.NAVER_OCR_GENERAL_INVOKE_URL.replace(/\/+$/, '');
-const res = await fetch(`${url}/general`, {
+const endpoint = url.endsWith('/general') ? url : `${url}/general`;
+const res = await fetch(endpoint, {
   method: 'POST',
   headers: { 'X-OCR-SECRET': process.env.NAVER_OCR_GENERAL_SECRET, 'Content-Type': 'application/json' },
   body: JSON.stringify({
