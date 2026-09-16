@@ -28,43 +28,10 @@ function Row({ k, v, danger }: { k: string; v: string; danger?: boolean }) {
   );
 }
 
-/** 초기화 기준일 입력(기본 오늘) + 확인. 카드별과 전체가 같은 패널을 쓴다. */
-function ResetPanel({
-  date,
-  busy,
-  onDate,
-  onConfirm,
-  onClose,
-}: {
-  date: string;
-  busy: boolean;
-  onDate: (d: string) => void;
-  onConfirm: () => void;
-  onClose: () => void;
-}) {
-  return (
-    <div className="my-2 rounded-lg bg-slate-100 p-3">
-      <label className="block">
-        <span className={label}>초기화 기준일</span>
-        <input type="date" className={input} value={date} onChange={(e) => onDate(e.target.value)} />
-      </label>
-      <div className="mt-2 flex gap-2">
-        <button type="button" className={`${btnPrimary} flex-1`} disabled={busy || !date} onClick={onConfirm}>
-          초기화
-        </button>
-        <button type="button" className={btnSecondary} disabled={busy} onClick={onClose}>
-          닫기
-        </button>
-      </div>
-    </div>
-  );
-}
-
 export default function Cards() {
   const [cards, setCards] = useState<CardBalance[]>();
   const [editing, setEditing] = useState<Editing | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [reset, setReset] = useState<{ id: string | "all"; date: string } | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   /** 상세 시트에 보이는 카드. 항상 최신 목록에서 찾고, 없으면 시트가 닫힌다. */
@@ -107,21 +74,17 @@ export default function Cards() {
     if (await run(() => (id ? updateCard(id, c) : insertCard(c)))) setEditing(null);
   }
 
-  async function confirmReset() {
-    if (!reset) return;
-    const target = reset.id === "all" ? "모든 카드의" : "이 카드의";
-    if (!window.confirm(`${target} 잔액을 ${reset.date} 기준으로 초기 잔액으로 되돌립니다. 계속할까요?`)) return;
-    const { id, date } = reset;
-    if (await run(() => (id === "all" ? resetAllCards(date) : resetCard(id, date)))) {
-      setReset(null);
-      setSelectedId(null);
-    }
+  /** 확인창 한 번으로 즉시 초기화한다. 기준일은 실행한 날(KST). */
+  async function reset(c: CardBalance) {
+    if (window.confirm(`'${c.name}' 잔액을 초기화할까요?`) && (await run(() => resetCard(c.id, todayKst())))) closeSheet();
   }
 
-  /** 시트를 닫는다. 시트 안에서 펼친 카드별 초기화 패널도 함께 접는다(전체 초기화는 유지). */
+  async function resetAll() {
+    if (window.confirm("모든 카드의 잔액을 초기화할까요?")) await run(() => resetAllCards(todayKst()));
+  }
+
   function closeSheet() {
     setSelectedId(null);
-    if (reset?.id !== "all") setReset(null);
   }
 
   function edit(c: CardBalance) {
@@ -150,21 +113,11 @@ export default function Cards() {
           type="button"
           className={btnSecondary}
           disabled={busy || !cards?.length}
-          onClick={() => setReset({ id: "all", date: todayKst() })}
+          onClick={resetAll}
         >
           모든 카드 초기화
         </button>
       </div>
-
-      {reset?.id === "all" && (
-        <ResetPanel
-          date={reset.date}
-          busy={busy}
-          onDate={(date) => setReset({ ...reset, date })}
-          onConfirm={confirmReset}
-          onClose={() => setReset(null)}
-        />
-      )}
 
       {editing && (
         <div
@@ -255,27 +208,13 @@ export default function Cards() {
               <button type="button" className={btnSecondary} disabled={busy} onClick={() => edit(selected)}>
                 수정
               </button>
-              <button
-                type="button"
-                className={btnSecondary}
-                disabled={busy}
-                onClick={() => setReset({ id: selected.id, date: todayKst() })}
-              >
+              <button type="button" className={btnSecondary} disabled={busy} onClick={() => reset(selected)}>
                 초기화
               </button>
               <button type="button" className={btnDanger} disabled={busy} onClick={() => remove(selected)}>
                 삭제
               </button>
             </div>
-            {reset?.id === selected.id && (
-              <ResetPanel
-                date={reset.date}
-                busy={busy}
-                onDate={(date) => setReset({ ...reset, date })}
-                onConfirm={confirmReset}
-                onClose={() => setReset(null)}
-              />
-            )}
           </div>
         </div>
       )}
