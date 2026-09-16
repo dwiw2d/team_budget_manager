@@ -15,7 +15,7 @@ function Row({ k, v }: { k: string; v: string }) {
   );
 }
 
-/** 상세 시트: 모든 필드 읽기 전용, 메모만 저장, 취소(되돌릴 수 없음). */
+/** 상세 시트: 모든 필드 읽기 전용, 메모만 저장, 내역 취소(되돌릴 수 없음). */
 function Sheet({
   p,
   onClose,
@@ -80,18 +80,18 @@ function Sheet({
           />
         </label>
         {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
-        <div className="mt-3 flex gap-3">
+        <div className="mt-3 grid grid-cols-3 gap-3">
           <button
             type="button"
-            className={`${btnPrimary} flex-1`}
+            className={`${btnPrimary} ${canceled ? "col-span-3" : "col-span-2"}`}
             disabled={busy}
             onClick={() => run(() => updatePaymentMemo(p.id, memo.trim() || null))}
           >
-            메모 저장
+            저장
           </button>
           {!canceled && (
             <button type="button" className={btnDanger} disabled={busy} onClick={cancel}>
-              취소
+              내역 취소
             </button>
           )}
         </div>
