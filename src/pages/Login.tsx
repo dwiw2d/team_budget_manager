@@ -1,4 +1,4 @@
-import { useRef, useState, type ChangeEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { OWNER_EMAIL, PIN_LENGTH, isPin, onlyDigits } from "../lib/auth";
 import { supabase } from "../lib/supabase";
 
@@ -10,6 +10,21 @@ export default function Login() {
   // 실패 횟수. 칸 묶음의 key 로 써서 연속 실패해도 흔들림 애니메이션이 다시 재생되게 한다.
   const [fails, setFails] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  // iOS 는 키보드가 열려도 레이아웃 뷰포트가 그대로라, 키패드가 가린 높이를 visual viewport 로 직접 구해 아래 여백으로 줘야 칸이 즉시 위로 올라온다.
+  const [kb, setKb] = useState(0);
+
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return; // 미지원 브라우저는 기존 동작 유지
+    const apply = () => setKb(Math.max(0, window.innerHeight - vv.height - vv.offsetTop));
+    vv.addEventListener("resize", apply);
+    vv.addEventListener("scroll", apply);
+    apply();
+    return () => {
+      vv.removeEventListener("resize", apply);
+      vv.removeEventListener("scroll", apply);
+    };
+  }, []);
 
   // 값을 인자로 받는다. 자동 로그인이 setState 비동기를 기다리지 않게 하려는 것.
   async function login(value: string) {
@@ -34,7 +49,10 @@ export default function Login() {
   }
 
   return (
-    <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col justify-center px-4">
+    <main
+      className="mx-auto flex h-dvh w-full max-w-md flex-col justify-center px-4 transition-[padding] duration-200"
+      style={{ paddingBottom: kb }}
+    >
       <h1 className="mb-2 text-center text-3xl font-bold text-slate-900">SW2HW 장부</h1>
       <p className="mb-8 text-center text-sm text-slate-500">PIN 6자리를 입력하세요</p>
 
