@@ -78,7 +78,7 @@ export async function deleteCard(id: string): Promise<void> {
   if (error) throw error;
 }
 
-/** 잔액 기간이 지난 카드를 초기 잔액으로 채우는 RPC. 넘긴 카드 수를 돌려준다. */
+/** 잔액 기간이 지난 카드를 예산만큼 채우는 RPC. 넘긴 카드 수를 돌려준다. */
 export async function rollOverBalances(): Promise<number> {
   const { data, error } = await supabase.rpc("roll_over_balances");
   if (error) throw error;
