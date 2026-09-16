@@ -15,16 +15,27 @@ function need(key) {
   return value;
 }
 
+// Edge Function 이 쓰는 환경 변수. .env.local 에 없는 값은 건너뛴다(Gemini 는 보조라 없어도 된다).
+const SECRET_KEYS = [
+  "NAVER_OCR_GENERAL_INVOKE_URL",
+  "NAVER_OCR_GENERAL_SECRET",
+  "GEMINI_API_KEY",
+  "GEMINI_MODEL",
+];
+
 const commands = {
   link: () => ["link", "--project-ref", need("SUPABASE_PROJECT_REF"), "-p", need("SUPABASE_DB_PASSWORD")],
   push: () => ["db", "push", "-p", need("SUPABASE_DB_PASSWORD")],
   functions: () => ["functions", "deploy", "ocr"],
-  secrets: () => [
-    "secrets",
-    "set",
-    `NAVER_OCR_INVOKE_URL=${need("NAVER_OCR_INVOKE_URL")}`,
-    `NAVER_OCR_SECRET=${need("NAVER_OCR_SECRET")}`,
-  ],
+  secrets: () => {
+    const found = SECRET_KEYS.filter((k) => process.env[k]);
+    if (!found.length) {
+      console.error(`.env.local 에 올릴 값이 없습니다: ${SECRET_KEYS.join(" ")}`);
+      process.exit(1);
+    }
+    console.log(`올릴 시크릿: ${found.join(" ")}`); // 이름만. 값은 절대 출력하지 않는다.
+    return ["secrets", "set", ...found.map((k) => `${k}=${process.env[k]}`)];
+  },
 };
 
 const build = commands[process.argv[2]];
