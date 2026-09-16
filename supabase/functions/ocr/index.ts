@@ -1,12 +1,13 @@
 // Edge Function `ocr`: 영수증 이미지(base64)를 두 단계로 읽는다(설계 스펙 §5).
 //   1단계 CLOVA General OCR 로 글자를 읽고 clova-general.ts 파서로 네 필드를 뽑는다.
-//   2단계 파서가 확신하지 못한 필드(weak)가 있고 GEMINI_API_KEY 가 있으면 Gemini 로 보완한다.
+//   2단계 파서가 확신하지 못한 필드(weak)가 있거나 1단계가 통째로 실패했고
+//        GEMINI_API_KEY 가 있으면 Gemini 를 부른다. 부를지 말지는 merge.ts 의 resolve 가 정한다.
 // config.toml 의 [functions.ocr] verify_jwt = false 이므로 JWT 는 여기서 직접 검증한다.
 // 이 파일은 Deno 전용이라 tsconfig 의 typecheck 대상에서 제외되어 있다(exclude).
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { extract, type OcrField } from "./clova-general.ts";
 import { buildRequest, DEFAULT_MODEL, parseResponse, type GeminiResult } from "./gemini.ts";
-import { merge } from "./merge.ts";
+import { type ClovaOutcome, merge, resolve } from "./merge.ts";
 import { receipt1Fields } from "./clova-general.fixtures.ts";
 
 const CORS_HEADERS = {
@@ -86,7 +87,8 @@ Deno.serve(async (req) => {
   const secret = Deno.env.get("NAVER_OCR_GENERAL_SECRET");
   if (!invokeUrl || !secret) return json(503, { error: "ocr_not_configured" });
 
-  let fields: OcrField[];
+  //    실패해도 여기서 502 를 내지 않는다. 흐릿한 사진일수록 2단계가 필요하다.
+  let clova: ClovaOutcome = { ok: false };
   try {
     const res = await fetch(invokeUrl, {
       method: "POST",
@@ -99,16 +101,19 @@ Deno.serve(async (req) => {
         images: [{ format, name: "receipt", data: image }],
       }),
     });
-    if (!res.ok) return json(502, { error: "ocr_failed" });
-    const data = await res.json();
-    if (data?.images?.[0]?.inferResult !== "SUCCESS") return json(502, { error: "ocr_failed" });
-    fields = data.images[0].fields ?? [];
+    if (res.ok) {
+      const data = await res.json();
+      if (data?.images?.[0]?.inferResult === "SUCCESS") {
+        const fields: OcrField[] = data.images[0].fields ?? [];
+        const { weak, ...values } = extract(fields);
+        clova = { ok: true, values, weak };
+      }
+    }
   } catch {
-    return json(502, { error: "ocr_failed" });
+    // 네트워크 오류도 1단계 실패로 본다
   }
-  const { weak, ...clova } = extract(fields);
 
-  // 5. 2단계: 확신 없는 칸이 있을 때만 Gemini 를 부른다
-  const gemini = weak.length ? await askGemini(image, format) : null;
-  return json(200, merge(clova, weak, gemini));
+  // 5. 2단계: Gemini. 부를지 말지와 합치는 방법은 resolve 가 정한다.
+  const result = await resolve(clova, () => askGemini(image, format));
+  return result ? json(200, result) : json(502, { error: "ocr_failed" });
 });

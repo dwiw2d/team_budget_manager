@@ -1,4 +1,4 @@
-// CLOVA 파서 결과와 Gemini 보완 결과를 합치는 규칙 (설계 스펙 §5). 순수 모듈.
+// CLOVA 파서 결과와 Gemini 보완 결과를 합치는 규칙, 그리고 2단계를 부를지 정하는 규칙 (설계 스펙 §5). 순수 모듈.
 import type { GeminiResult } from "./gemini.ts";
 
 export const FIELDS = ["merchant", "paidAt", "amount", "cardNumber"] as const;
@@ -29,4 +29,24 @@ export function merge(clova: GeminiResult, weak: string[], gemini: GeminiResult 
     }
   }
   return { ...(merged as unknown as GeminiResult), uncertain };
+}
+
+/** 1단계(CLOVA) 결과. 실패는 ok:false 하나로 뭉뚱그린다(네트워크·HTTP 오류·inferResult·응답 파싱 모두). */
+export type ClovaOutcome =
+  | { ok: true; values: GeminiResult; weak: string[] }
+  | { ok: false };
+
+/** 2단계를 부를지와 최종 응답을 정한다. null 이면 502 `ocr_failed` 다.
+ *  - 1단계 성공: weak 가 있을 때만 Gemini 를 부르고 merge 규칙을 따른다.
+ *  - 1단계 실패: Gemini 만으로 답한다. 대조할 근거가 없으므로 값이 있는 칸은 전부 uncertain 이다. */
+export async function resolve(
+  clova: ClovaOutcome,
+  askGemini: () => Promise<GeminiResult | null>,
+): Promise<Merged | null> {
+  if (clova.ok) {
+    return merge(clova.values, clova.weak, clova.weak.length ? await askGemini() : null);
+  }
+  const gemini = await askGemini();
+  if (!gemini) return null;
+  return { ...gemini, uncertain: FIELDS.filter((f) => gemini[f] !== null) };
 }

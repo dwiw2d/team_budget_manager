@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { merge } from "./merge.ts";
+import { describe, expect, it, vi } from "vitest";
+import { merge, resolve } from "./merge.ts";
 
 const clova = {
   merchant: "동남집",
@@ -48,5 +48,40 @@ describe("merge", () => {
     const mine = { ...clova, cardNumber: null };
     expect(merge(mine, [], clova).cardNumber).toBe("4265-86**-****-****");
     expect(merge(mine, [], clova).uncertain).toEqual([]);
+  });
+});
+
+describe("resolve", () => {
+  it("(a) CLOVA 성공·weak 없음이면 Gemini 를 부르지 않는다", async () => {
+    const askGemini = vi.fn();
+    expect(await resolve({ ok: true, values: clova, weak: [] }, askGemini)).toEqual({
+      ...clova,
+      uncertain: [],
+    });
+    expect(askGemini).not.toHaveBeenCalled();
+  });
+
+  it("(b) CLOVA 성공·weak 있으면 Gemini 와 병합하고 달라진 필드만 uncertain 이다", async () => {
+    const mine = { ...clova, amount: 32727 };
+    const gemini = { ...clova, merchant: "동남집앞" };
+    const askGemini = vi.fn().mockResolvedValue(gemini);
+    expect(await resolve({ ok: true, values: mine, weak: ["amount"] }, askGemini)).toEqual({
+      ...clova,
+      merchant: "동남집앞",
+      uncertain: ["merchant"],
+    });
+    expect(askGemini).toHaveBeenCalledTimes(1);
+  });
+
+  it("(c) CLOVA 실패·Gemini 성공이면 Gemini 값을 쓰고 값이 있는 칸을 전부 uncertain 에 넣는다", async () => {
+    const gemini = { ...clova, paidAt: null };
+    expect(await resolve({ ok: false }, vi.fn().mockResolvedValue(gemini))).toEqual({
+      ...gemini,
+      uncertain: ["merchant", "amount", "cardNumber"],
+    });
+  });
+
+  it("(d) CLOVA 실패·Gemini 실패면 null 로 실패를 알린다", async () => {
+    expect(await resolve({ ok: false }, vi.fn().mockResolvedValue(null))).toBeNull();
   });
 });
