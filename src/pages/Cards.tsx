@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { btnPrimary, btnSecondary, btnText, h1, input, label } from "../components/ui";
+import { btnDanger, btnPrimary, btnSecondary, btnText, h1, input, label } from "../components/ui";
 import { todayKst } from "../lib/dates";
 import {
   deleteCard,
@@ -17,6 +17,15 @@ interface Editing {
   name: string;
   initial: string;
   last4: string;
+}
+
+function Row({ k, v, danger }: { k: string; v: string; danger?: boolean }) {
+  return (
+    <div className="flex justify-between gap-3">
+      <dt className="text-slate-500">{k}</dt>
+      <dd className={`text-right ${danger ? "text-red-600" : "text-slate-900"}`}>{v}</dd>
+    </div>
+  );
 }
 
 /** 초기화 기준일 입력(기본 오늘) + 확인. 카드별과 전체가 같은 패널을 쓴다. */
@@ -54,9 +63,12 @@ function ResetPanel({
 export default function Cards() {
   const [cards, setCards] = useState<CardBalance[]>();
   const [editing, setEditing] = useState<Editing | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [reset, setReset] = useState<{ id: string | "all"; date: string } | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  /** 상세 시트에 보이는 카드. 항상 최신 목록에서 찾고, 없으면 시트가 닫힌다. */
+  const selected = cards?.find((c) => c.id === selectedId);
 
   const load = () =>
     listCardBalances()
@@ -100,11 +112,26 @@ export default function Cards() {
     const target = reset.id === "all" ? "모든 카드의" : "이 카드의";
     if (!window.confirm(`${target} 잔액을 ${reset.date} 기준으로 초기 잔액으로 되돌립니다. 계속할까요?`)) return;
     const { id, date } = reset;
-    if (await run(() => (id === "all" ? resetAllCards(date) : resetCard(id, date)))) setReset(null);
+    if (await run(() => (id === "all" ? resetAllCards(date) : resetCard(id, date)))) {
+      setReset(null);
+      setSelectedId(null);
+    }
   }
 
-  function remove(c: CardBalance) {
-    if (window.confirm(`'${c.name}' 카드를 삭제할까요?`)) run(() => deleteCard(c.id));
+  /** 시트를 닫는다. 시트 안에서 펼친 카드별 초기화 패널도 함께 접는다(전체 초기화는 유지). */
+  function closeSheet() {
+    setSelectedId(null);
+    if (reset?.id !== "all") setReset(null);
+  }
+
+  function edit(c: CardBalance) {
+    closeSheet();
+    setError("");
+    setEditing({ id: c.id, name: c.name, initial: String(c.initial_balance), last4: c.last4 ?? "" });
+  }
+
+  async function remove(c: CardBalance) {
+    if (window.confirm(`'${c.name}' 카드를 삭제할까요?`) && (await run(() => deleteCard(c.id)))) closeSheet();
   }
 
   return (
@@ -198,7 +225,62 @@ export default function Cards() {
         </div>
       )}
 
-      {error && !editing && <p className="mb-3 text-sm text-red-600">{error}</p>}
+      {selected && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="카드 상세"
+          className="fixed inset-0 z-20 flex items-end bg-black/40"
+          onClick={() => !busy && closeSheet()}
+        >
+          <div
+            className="max-h-[90dvh] w-full overflow-y-auto rounded-t-2xl bg-white p-5 pb-[calc(env(safe-area-inset-bottom)+1.25rem)]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-lg font-bold text-slate-900">카드 상세</h2>
+              <button type="button" className={btnText} disabled={busy} onClick={closeSheet} aria-label="닫기">
+                ✕
+              </button>
+            </div>
+            <dl className="mb-4 space-y-2 text-sm">
+              <Row k="이름" v={selected.name} />
+              <Row k="카드번호 뒤 4자리" v={selected.last4 ?? "-"} />
+              <Row k="초기 잔액" v={formatWon(selected.initial_balance)} />
+              <Row k="잔액" v={formatWon(selected.balance)} danger={selected.balance < 0} />
+              <Row k="초기화 기준일" v={selected.reset_date ?? "초기화 전"} />
+            </dl>
+            {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
+            <div className="grid grid-cols-3 gap-2">
+              <button type="button" className={btnSecondary} disabled={busy} onClick={() => edit(selected)}>
+                수정
+              </button>
+              <button
+                type="button"
+                className={btnSecondary}
+                disabled={busy}
+                onClick={() => setReset({ id: selected.id, date: todayKst() })}
+              >
+                초기화
+              </button>
+              <button type="button" className={btnDanger} disabled={busy} onClick={() => remove(selected)}>
+                삭제
+              </button>
+            </div>
+            {reset?.id === selected.id && (
+              <ResetPanel
+                date={reset.date}
+                busy={busy}
+                onDate={(date) => setReset({ ...reset, date })}
+                onConfirm={confirmReset}
+                onClose={() => setReset(null)}
+              />
+            )}
+          </div>
+        </div>
+      )}
+
+      {error && !editing && !selected && <p className="mb-3 text-sm text-red-600">{error}</p>}
 
       {!cards ? (
         <p className="text-slate-500">불러오는 중…</p>
@@ -207,52 +289,28 @@ export default function Cards() {
       ) : (
         <ul className="divide-y divide-slate-200">
           {cards.map((c) => (
-            <li key={c.id} className="py-3">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="font-semibold text-slate-900">
-                    {c.name}
-                    {c.last4 && <span className="ml-2 text-sm font-normal text-slate-500">•{c.last4}</span>}
-                  </p>
-                  <p className="text-sm text-slate-500">초기 잔액 {formatWon(c.initial_balance)}</p>
-                  <p className="text-sm text-slate-500">
-                    {c.reset_date ? `초기화 기준일 ${c.reset_date}` : "초기화 전"}
-                  </p>
-                </div>
-                <p className={`text-lg font-bold ${c.balance < 0 ? "text-red-600" : "text-slate-900"}`}>
-                  {formatWon(c.balance)}
-                </p>
-              </div>
-              <div className="mt-1 flex justify-end">
-                <button
-                  type="button"
-                  className={btnText}
-                  disabled={busy}
-                  onClick={() => { setError(""); setEditing({ id: c.id, name: c.name, initial: String(c.initial_balance), last4: c.last4 ?? "" }); }}
-                >
-                  수정
-                </button>
-                <button
-                  type="button"
-                  className={btnText}
-                  disabled={busy}
-                  onClick={() => setReset({ id: c.id, date: todayKst() })}
-                >
-                  초기화
-                </button>
-                <button type="button" className={`${btnText} text-red-600`} disabled={busy} onClick={() => remove(c)}>
-                  삭제
-                </button>
-              </div>
-              {reset?.id === c.id && (
-                <ResetPanel
-                  date={reset.date}
-                  busy={busy}
-                  onDate={(date) => setReset({ ...reset, date })}
-                  onConfirm={confirmReset}
-                  onClose={() => setReset(null)}
-                />
-              )}
+            <li key={c.id}>
+              <button
+                type="button"
+                className="min-h-11 w-full py-3 text-left"
+                onClick={() => { setError(""); setSelectedId(c.id); }}
+              >
+                <span className="flex items-start justify-between gap-3">
+                  <span>
+                    <span className="block font-semibold text-slate-900">
+                      {c.name}
+                      {c.last4 && <span className="ml-2 text-sm font-normal text-slate-500">•{c.last4}</span>}
+                    </span>
+                    <span className="block text-sm text-slate-500">초기 잔액 {formatWon(c.initial_balance)}</span>
+                    <span className="block text-sm text-slate-500">
+                      {c.reset_date ? `초기화 기준일 ${c.reset_date}` : "초기화 전"}
+                    </span>
+                  </span>
+                  <span className={`text-lg font-bold ${c.balance < 0 ? "text-red-600" : "text-slate-900"}`}>
+                    {formatWon(c.balance)}
+                  </span>
+                </span>
+              </button>
             </li>
           ))}
         </ul>
