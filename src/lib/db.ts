@@ -78,15 +78,19 @@ export async function deleteCard(id: string): Promise<void> {
   if (error) throw error;
 }
 
-export async function resetCard(id: string, resetDate: string): Promise<void> {
-  const { error } = await supabase.from("cards").update({ reset_date: resetDate }).eq("id", id);
+/** 초기화 시각은 누른 그 순간. 이 시각 이후의 결제만 잔액을 줄인다. */
+export async function resetCard(id: string): Promise<void> {
+  const { error } = await supabase
+    .from("cards")
+    .update({ reset_at: new Date().toISOString() })
+    .eq("id", id);
   if (error) throw error;
 }
 
-export async function resetAllCards(resetDate: string): Promise<void> {
+export async function resetAllCards(): Promise<void> {
   const { error } = await supabase
     .from("cards")
-    .update({ reset_date: resetDate })
+    .update({ reset_at: new Date().toISOString() })
     .not("id", "is", null);
   if (error) throw error;
 }

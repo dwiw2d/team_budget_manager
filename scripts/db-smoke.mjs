@@ -31,7 +31,6 @@ declare
   n integer;
   ok boolean;
   detail text;
-  today date := (now() at time zone 'Asia/Seoul')::date;
   cutoff date := (date_trunc('month', now() at time zone 'Asia/Seoul') - interval '2 months')::date;
   results jsonb := '[]'::jsonb;
 begin
@@ -40,7 +39,7 @@ begin
     raise exception 'ROLLBACK_OK %', '[{"item":"pre","ok":false,"detail":"auth.users 에 사용자가 없습니다 (npm run sb:seed-owner 먼저)"}]';
   end if;
 
-  -- (a) 카드 1장(초기 잔액 100000, reset_date null) + 결제 3건(30000, 20000, 어제 10000) → balance 40000
+  -- (a) 카드 1장(초기 잔액 100000, reset_at null) + 결제 3건(30000, 20000, 어제 10000) → balance 40000
   insert into public.cards (owner_id, name, initial_balance)
     values (owner_uuid, '스모크 카드 A', 100000) returning id into card_a;
   insert into public.payments (owner_id, card_id, merchant, amount, paid_at, source)
@@ -76,13 +75,20 @@ begin
   end;
   results := results || jsonb_build_object('item', 'd', 'ok', ok, 'detail', detail);
 
-  -- (e) reset_date 를 오늘로 → 어제 결제 10000 제외 → 80000
-  update public.cards set reset_date = today where id = card_a;
+  -- (e) 초기화 직후 잔액 = 초기 잔액 (그 시각 이전 결제는 전부 잔액에서 빠진다)
+  update public.cards set reset_at = now() where id = card_a;
   select balance into bal from public.card_balances where id = card_a;
-  results := results || jsonb_build_object('item', 'e', 'ok', bal = 80000,
-    'detail', format('balance=%s (기대 80000)', bal));
+  results := results || jsonb_build_object('item', 'e', 'ok', bal = 100000,
+    'detail', format('balance=%s (기대 100000 = 초기 잔액)', bal));
 
-  -- (f) purge 규칙: reset_date 가 있고 cutoff 이전이며 reset_date 이전인 결제만 삭제 대상
+  -- (f) 초기화 이후 결제만 잔액을 줄인다 → 15000 결제 후 85000
+  insert into public.payments (owner_id, card_id, merchant, amount, paid_at, source)
+    values (owner_uuid, card_a, '초기화 이후 결제', 15000, now(), 'manual');
+  select balance into bal from public.card_balances where id = card_a;
+  results := results || jsonb_build_object('item', 'f', 'ok', bal = 85000,
+    'detail', format('balance=%s (기대 85000)', bal));
+
+  -- (g) purge 규칙: reset_at 이 있고 cutoff 이전이며 reset_at 이전인 결제만 삭제 대상
   insert into public.cards (owner_id, name, initial_balance)
     values (owner_uuid, '스모크 카드 B(초기화 없음)', 50000) returning id into card_b;
   insert into public.payments (owner_id, card_id, merchant, amount, paid_at, source) values
@@ -96,15 +102,15 @@ begin
     delete from public.payments p using public.cards c
      where p.card_id = c.id
        and p.owner_id = owner_uuid
-       and c.reset_date is not null
+       and c.reset_at is not null
        and (p.paid_at at time zone 'Asia/Seoul')::date < cutoff
-       and (p.paid_at at time zone 'Asia/Seoul')::date < c.reset_date
+       and p.paid_at < c.reset_at
      returning p.id
   )
   select count(*) into n from d;
   ok := ok and (n = 1);
   detail := detail || format('; 동일 조건 delete returning 건수=%s (기대 1: 카드 A 의 4개월 전 결제만)', n);
-  results := results || jsonb_build_object('item', 'f', 'ok', ok, 'detail', detail);
+  results := results || jsonb_build_object('item', 'g', 'ok', ok, 'detail', detail);
 
   raise exception 'ROLLBACK_OK %', results::text;
 end

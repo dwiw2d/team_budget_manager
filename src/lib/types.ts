@@ -6,8 +6,8 @@ export interface Card {
   name: string;
   initial_balance: number;
   last4: string | null;
-  /** "YYYY-MM-DD" 또는 null(초기화 전) */
-  reset_date: string | null;
+  /** 마지막 초기화 시각(ISO) 또는 null(초기화 전) */
+  reset_at: string | null;
   created_at: string;
 }
 

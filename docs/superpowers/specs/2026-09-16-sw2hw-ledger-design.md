@@ -14,15 +14,15 @@
 |---|---|
 | 1 | 단일 계정, PIN 6자리 하나. 계정은 배포 시 PM이 관리자 API로 1개 생성. 앱에는 로그인(PIN 입력) 화면만 있음. 공개 가입 차단 |
 | 2 | Supabase(Postgres, Auth, Edge Function) + 정적 SPA. 자체 호스팅 Supabase(Docker)로 이전 가능하게 유지(ADR 0001) |
-| 3 | 카드마다 초기 잔액. 잔액 = 초기 잔액 − (마지막 초기화 기준일 이후, 취소되지 않은 결제 합) |
-| 4 | 입금 없음. 초기 잔액은 수정 가능. 초기화(카드별·전체)는 카드 관리 화면에서만, 확인창 한 번으로 실행하며 기준일은 실행한 날 |
+| 3 | 카드마다 초기 잔액. 잔액 = 초기 잔액 − (마지막 초기화 시각 이후, 취소되지 않은 결제 합) |
+| 4 | 입금 없음. 초기 잔액은 수정 가능. 초기화(카드별·전체)는 카드 관리 화면에서만, 확인창 한 번으로 실행한다. 초기화하면 그 시각 이전 결제가 잔액에서 빠져 잔액이 초기 잔액이 된다 |
 | 5 | 결제 = 카드, 가맹점, 금액, 결제 일시, 메모(선택), 영수증에서 읽은 카드번호 일부, 출처(receipt/manual) |
 | 6 | 영수증 사진은 OCR 후 버림. 촬영 흐름은 저장 직전까지 File 객체를 유지해 나중에 업로드 단계를 끼울 수 있게 함 |
 | 7 | 온라인 전용 PWA. 오프라인이면 안내 배너만 |
 | 8 | Vite + React + TypeScript + Tailwind + vite-plugin-pwa + react-router + supabase-js. 상태관리·컴포넌트 라이브러리 없음 |
 | 9 | 프런트 호스팅: GitHub Pages(dwiw2d 계정, 공개 저장소 `team_budget_manager`) + GitHub Actions. Docker(nginx) 이미지도 제공 |
 | 10 | 결제 내역: 월별 목록 + 카드 필터 + 월 합계. 메모만 수정. 삭제 없음. 잘못된 결제는 취소(되돌릴 수 없음) |
-| 11 | 보관: 이번 달 포함 최근 3개월. 그보다 오래되고 카드 초기화 기준일보다 앞선 결제만 앱 시작 시 서버 함수로 삭제 |
+| 11 | 보관: 이번 달 포함 최근 3개월. 그보다 오래되고 카드의 마지막 초기화보다 앞선 결제만 앱 시작 시 서버 함수로 삭제 |
 | 12 | 앱 이름 "SW2HW 장부". 시간대 Asia/Seoul 고정. 금액은 원 단위 정수 |
 
 ## 3. 아키텍처
@@ -39,9 +39,9 @@
 - 로컬 비밀 값은 `.env.local`(git 무시)에 있다. 키 이름: `SUPABASE_ACCESS_TOKEN`, `SUPABASE_PROJECT_REF`, `SUPABASE_DB_PASSWORD`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `APP_OWNER_EMAIL`, `APP_OWNER_PASSWORD`, (아침에 추가) `NAVER_OCR_INVOKE_URL`, `NAVER_OCR_SECRET`. **값을 로그·커밋·문서에 절대 출력하지 않는다.**
 - Supabase 프로젝트 ref `owxbsjsetesazmnqvzxd`(도쿄). CLI는 `npx supabase`(2.117.0)로 실행하고 `SUPABASE_ACCESS_TOKEN` 환경 변수를 넘긴다.
 
-## 4. 데이터 모델 (마이그레이션 `supabase/migrations/0001_init.sql`)
+## 4. 데이터 모델 (마이그레이션 `supabase/migrations/0001_init.sql` + `0002_reset_at.sql`)
 
-아래 DDL이 계약이다. 컬럼 이름을 바꾸지 않는다.
+아래 DDL이 계약이다. 컬럼 이름을 바꾸지 않는다. `0001_init.sql` 은 클라우드에 적용된 뒤 수정하지 않으며, 이후 변경은 번호를 올린 파일로 쌓는다. `0002_reset_at.sql` 이 `cards.reset_date date` 를 `cards.reset_at timestamptz` 로 바꾸고 뷰·함수를 다시 만든다(초기화를 날짜가 아니라 시각으로 기록해야 초기화 당일 결제가 잔액에서 빠진다). 아래는 두 마이그레이션을 적용한 최종 형태다.
 
 ```sql
 create table public.cards (
@@ -50,7 +50,7 @@ create table public.cards (
   name text not null check (length(trim(name)) between 1 and 40),
   initial_balance bigint not null check (initial_balance >= 0),
   last4 text check (last4 ~ '^[0-9]{4}$'),
-  reset_date date,
+  reset_at timestamptz,
   created_at timestamptz not null default now()
 );
 
@@ -80,7 +80,7 @@ create index payments_owner_paid_idx on public.payments (owner_id, paid_at desc)
 ```
 balance = initial_balance - coalesce(sum(p.amount), 0)
   where p.card_id = c.id and p.canceled_at is null
-    and (c.reset_date is null or (p.paid_at at time zone 'Asia/Seoul')::date >= c.reset_date)
+    and (c.reset_at is null or p.paid_at >= c.reset_at)
 ```
 
 **함수 `purge_old_payments() returns integer`** (`security definer`, `set search_path = public`, `authenticated`에만 execute 허용, `anon`/`public`은 revoke):
@@ -88,9 +88,9 @@ balance = initial_balance - coalesce(sum(p.amount), 0)
 ```
 cutoff := (date_trunc('month', now() at time zone 'Asia/Seoul') - interval '2 months')::date;
 delete from payments p using cards c
- where p.card_id = c.id and p.owner_id = auth.uid() and c.reset_date is not null
+ where p.card_id = c.id and p.owner_id = auth.uid() and c.reset_at is not null
    and (p.paid_at at time zone 'Asia/Seoul')::date < cutoff
-   and (p.paid_at at time zone 'Asia/Seoul')::date < c.reset_date;
+   and p.paid_at < c.reset_at;
 return 삭제 건수;
 ```
 
@@ -118,7 +118,7 @@ return 삭제 건수;
 2. **홈 `/`(대시보드)**: 상단 총 잔액(큰 글씨), 카드별 잔액 목록(이름, 뒤 4자리, 잔액. 음수는 빨간색), 최근 결제 5건(가맹점, 금액, 카드 이름, 일시. 취소 건은 취소선). 진입 시 `purge_old_payments` RPC 호출 후 데이터 로드.
 3. **결제 추가 `/add`**: 상단에 "영수증 촬영"(`<input type="file" accept="image/*" capture="environment">`)과 "직접 입력" 두 버튼. 촬영 시 canvas로 긴 변 1600px, JPEG 0.85로 줄여 base64로 `ocr` 함수 호출, "영수증을 읽는 중…" 표시. 결과로 폼을 채우고 OCR이 읽은 카드번호를 읽기 전용으로 표시. 카드 자동 선택: 읽은 번호의 마지막 4자리와 `last4`가 같은 카드가 정확히 하나면 선택. 폼: 카드(select, 필수), 가맹점(필수), 금액(필수, 양의 정수), 결제 일시(`datetime-local`, 기본 지금), 메모(선택). 저장 → insert(`source`는 촬영이면 `receipt`, 아니면 `manual`; OCR 실패 후 직접 입력해도 `manual`) → 홈으로. OCR 실패(503/502/네트워크)는 "영수증을 읽지 못했습니다. 직접 입력해 주세요" 후 빈 폼.
 4. **내역 `/payments`**: 상단 월 이동(◀ 2026년 9월 ▶, 기본 이번 달), 카드 필터(전체/각 카드), 월 합계(취소 제외). 목록은 결제 일시 내림차순. 항목 클릭 → 상세 시트: 모든 필드 읽기 전용, 메모만 편집·저장, "취소" 버튼(확인창: "이 결제를 취소하면 되돌릴 수 없습니다"). 취소된 항목은 취소선 + "취소됨". 월 경계는 KST(+09:00 고정) 기준으로 계산해 `paid_at gte/lt`로 조회.
-5. **카드 `/cards`**: 카드 목록(이름, 뒤 4자리, 초기 잔액, 잔액, 초기화 기준일). 카드 추가/수정 폼(이름, 초기 잔액, 뒤 4자리 선택). 카드별 "초기화" 버튼과 목록 상단 "모든 카드 초기화" 버튼: 둘 다 확인창 후 즉시 초기화하며 기준일은 실행한 날(KST). 카드 삭제 버튼: 확인창 후 삭제, FK 오류면 안내.
+5. **카드 `/cards`**: 카드 목록(이름, 뒤 4자리, 초기 잔액, 잔액, 마지막 초기화 시각. 초기화 전이면 "초기화 전"). 카드 추가/수정 폼(이름, 초기 잔액, 뒤 4자리 선택). 카드별 "초기화" 버튼과 목록 상단 "모든 카드 초기화" 버튼: 둘 다 확인창 후 즉시 초기화하며 기준은 누른 그 시각. 카드 삭제 버튼: 확인창 후 삭제, FK 오류면 안내.
 6. **설정 `/settings`**: PIN 변경(현재 PIN·새 PIN·새 PIN 확인 3개 입력. 현재 PIN 은 `signInWithPassword`로 확인한 뒤 `auth.updateUser`로 변경), 로그아웃, 앱 버전 표시.
 
 PWA: manifest `name`/`short_name` "SW2HW 장부", `display: standalone`, `lang: ko`, `theme_color`, 아이콘 192·512 PNG(+ SVG 원본, 글자 "S"). 서비스워커는 vite-plugin-pwa `generateSW`, `registerType: 'autoUpdate'`, 앱 셸만 프리캐시하고 Supabase 요청은 캐시하지 않는다.
@@ -173,9 +173,9 @@ docs/adr/, docs/superpowers/specs/, docs/scrum/, docs/qa/
 - [ ] 내역: 월 이동, 카드 필터, 월 합계(취소 제외), 정렬 최신순
 - [ ] 결제 상세: 메모만 수정 가능, 다른 필드 편집 불가
 - [ ] 결제 취소: 확인창, 취소 후 잔액에서 제외, 취소선 표시, 되돌리기 불가
-- [ ] 카드별 초기화(확인창 후 즉시, 기준일은 실행한 날) → 잔액이 초기 잔액으로, 기준일 이전 결제는 내역에 남되 잔액 제외
+- [ ] 카드별 초기화(확인창 후 즉시, 기준은 누른 그 시각) → 잔액이 초기 잔액과 같아지고, 그 시각 이전 결제는 내역에 남되 잔액 제외(같은 날 결제 포함)
 - [ ] 모든 카드 초기화
-- [ ] 초기화 후 기준일 이전 날짜의 결제를 추가하면 잔액이 줄지 않음
+- [ ] 초기화 후 초기화 시각 이전 일시의 결제를 추가하면 잔액이 줄지 않음
 - [ ] 3개월 지난 결제 정리 규칙(스모크 스크립트로 검증)
 - [ ] 현재 PIN 확인 후 PIN 변경, 변경 뒤에는 새 PIN 으로만 로그인
 - [ ] PWA 설치 가능(manifest, 아이콘, 서비스워커), 오프라인 배너
