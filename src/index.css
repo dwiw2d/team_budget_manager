@@ -1,1 +1,31 @@
 @import "tailwindcss";
+
+/* PIN 입력 실패 시 칸을 좌우로 흔든다. */
+@keyframes pin-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20% {
+    transform: translateX(-6px);
+  }
+  40% {
+    transform: translateX(6px);
+  }
+  60% {
+    transform: translateX(-6px);
+  }
+  80% {
+    transform: translateX(6px);
+  }
+}
+
+.animate-pin-shake {
+  animation: pin-shake 0.35s ease-in-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-pin-shake {
+    animation: none;
+  }
+}
