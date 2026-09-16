@@ -113,6 +113,7 @@ return 삭제 건수;
 - **1단계가 통째로 실패한 경우**(`merge.ts`의 `resolve`): Gemini 결과만으로 응답한다. 대조할 CLOVA 근거가 하나도 없으므로 값이 있는 필드 이름을 전부(`cardNumber` 포함) `uncertain`에 넣어 사용자가 확인하게 한다. Gemini도 실패하면 502다. 2단계를 부를지 정하는 이 판단은 `index.ts`가 아니라 `merge.ts`의 순수 함수 `resolve(clova, askGemini)`에 있고 Vitest로 네 경우(1단계 성공·weak 없음 / 성공·weak 있음 / 실패·Gemini 성공 / 실패·Gemini 실패)를 덮는다.
 - 파서와 Gemini 모듈은 `supabase/functions/ocr/{clova-general,gemini,merge}.ts`에 Deno 의존성 없는 순수 TS로 두고 Vitest로 테스트한다(`*.fixtures.ts`는 실제 응답에서 옮긴 것). `scripts/ocr-bench/lib/*-extract.mjs`는 이 `.ts` 를 재수출하는 껍데기다.
 - 오류: 시크릿 없음(`NAVER_OCR_GENERAL_INVOKE_URL` 또는 `NAVER_OCR_GENERAL_SECRET` 미설정) → 503 `{ "error": "ocr_not_configured" }`. **1단계와 2단계가 모두 실패**(또는 1단계 실패 + `GEMINI_API_KEY` 없음) → 502 `{ "error": "ocr_failed" }`. 1단계만 실패하고 2단계가 성공하면 200 이다.
+- 오류: **네 필드(`merchant`, `paidAt`, `amount`, `cardNumber`)를 하나도 못 읽으면**(영수증이 아닌 사진이라 2단계가 전부 null 을 돌려준 경우 포함) 어느 경로로 왔든 성공이 아니라 502 `{ "error": "ocr_failed" }` 다. 이 판단도 `merge.ts`의 `resolve` 안에 있다.
 - `NAVER_OCR_MOCK=1`이 설정된 경우에만 아무것도 호출하지 않고 CLOVA 픽스처를 파서에 통과시킨 고정 응답을 돌려준다(QA 전용, 클라우드에는 설정하지 않음).
 - 시크릿 등록은 `npm run sb:secrets`(`.env.local`에 있는 `NAVER_OCR_GENERAL_INVOKE_URL`, `NAVER_OCR_GENERAL_SECRET`, `GEMINI_API_KEY`, `GEMINI_MODEL` 중 존재하는 값만 `supabase secrets set`으로 올리고 이름만 출력).
 

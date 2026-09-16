@@ -84,4 +84,22 @@ describe("resolve", () => {
   it("(d) CLOVA 실패·Gemini 실패면 null 로 실패를 알린다", async () => {
     expect(await resolve({ ok: false }, vi.fn().mockResolvedValue(null))).toBeNull();
   });
+
+  it("(e) 네 필드가 모두 null 이면 어느 경로로 왔든 실패다", async () => {
+    const empty = { merchant: null, paidAt: null, amount: null, cardNumber: null };
+    // CLOVA 실패 후 Gemini 가 "읽을 게 없다"는 뜻으로 전부 null 을 준 경우(영수증이 아닌 사진)
+    expect(await resolve({ ok: false }, vi.fn().mockResolvedValue(empty))).toBeNull();
+    // CLOVA 는 성공했지만 파서도 Gemini 도 아무것도 못 뽑은 경우
+    expect(
+      await resolve({ ok: true, values: empty, weak: ["merchant"] }, vi.fn().mockResolvedValue(empty)),
+    ).toBeNull();
+  });
+
+  it("(f) 한 칸이라도 값이 있으면 성공이고 uncertain 규칙은 그대로다", async () => {
+    const only = { merchant: null, paidAt: null, amount: 59000, cardNumber: null };
+    expect(await resolve({ ok: false }, vi.fn().mockResolvedValue(only))).toEqual({
+      ...only,
+      uncertain: ["amount"],
+    });
+  });
 });
