@@ -1,3 +1,4 @@
+// 주의: 실제 영수증에서 만든 픽스처지만 전화번호와 주소는 가짜 값으로 치환했다(공개 저장소).
 // prebuilt-receipt (api-version=2024-11-30) 의 GET analyzeResults 응답을 손으로 흉내낸 픽스처.
 // 봉투(status/analyzeResult/documents[].fields)와 값 표현(valueString/valueDate/valueTime/valueCurrency)은
 // https://learn.microsoft.com/en-us/rest/api/aiservices/document-models/get-analyze-result?view=rest-aiservices-v4.0%20(2024-11-30)
@@ -21,12 +22,12 @@ export const receipt1Response = {
           MerchantPhoneNumber: {
             type: 'phoneNumber',
             valuePhoneNumber: '+82226273999',
-            content: 'TEL:0226273999',
+            content: 'TEL:0212345678',
             confidence: 0.9,
           },
           MerchantAddress: {
             type: 'address',
-            content: '서울 금천구 가산디지털1로 219 111호(가산동, 벽산디지털밸리6차)',
+            content: '서울 어느구 어느로1길 111 222호(어느동, 어느빌딩3차)',
             confidence: 0.88,
           },
           TransactionDate: { type: 'date', valueDate: '2026-09-04', content: '26/09/04', confidence: 0.93 },
@@ -79,12 +80,12 @@ export const receipt2Response = {
           MerchantPhoneNumber: {
             type: 'phoneNumber',
             valuePhoneNumber: '+82233613613',
-            content: 'TEL: 023361361',
+            content: 'TEL: 021234567',
             confidence: 0.86,
           },
           MerchantAddress: {
             type: 'address',
-            content: '서울특별시 마포구 양화로7길 6-5 2층 204호',
+            content: '서울특별시 어느구 어느로2길 1-1 3층 404호',
             confidence: 0.9,
           },
           TransactionDate: { type: 'date', valueDate: '2026-09-15', content: '20260915', confidence: 0.94 },
