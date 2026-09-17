@@ -73,6 +73,8 @@ export default function AddPayment() {
   // 두 제공자의 무료 한도가 모두 떨어졌는가. 한도를 못 읽었으면 false 로 두어 버튼을 막지 않는다.
   const [quotaGone, setQuotaGone] = useState(false);
   const [tip, setTip] = useState(false);
+  // 화면 아래 빨간 막대. 지금은 카드 앞자리가 겹칠 때만 쓴다(안내 자리 notice 와는 별개).
+  const [snack, setSnack] = useState("");
   // 사진 File 은 저장이 끝날 때까지 들고 있다가 결제 id 를 받은 뒤 저장소에 올린다.
   const photoRef = useRef<File | null>(null);
 
@@ -94,6 +96,13 @@ export default function AddPayment() {
     return () => document.removeEventListener("click", close);
   }, [tip]);
 
+  // 5초 뒤 저절로 사라진다. 다시 인식하거나 화면을 벗어나면 정리 함수가 타이머를 걷는다.
+  useEffect(() => {
+    if (!snack) return;
+    const t = setTimeout(() => setSnack(""), 5000);
+    return () => clearTimeout(t);
+  }, [snack]);
+
   function set<K extends keyof Form>(key: K, value: Form[K]) {
     setForm((f) => ({ ...(f ?? blank()), [key]: value }));
     setUncertain((u) => u.filter((field) => field !== OCR_FIELD[key]));
@@ -110,13 +119,16 @@ export default function AddPayment() {
     photoRef.current = file;
     setNotice("");
     setError("");
+    setSnack("");
     setReading(true);
     try {
       const r = await recognizeReceipt(file);
+      const auto = autoCardId(cards, r.cardNumber);
       setUncertain(r.uncertain ?? []);
+      if (auto.ambiguous) setSnack(`앞자리가 같은 카드가 ${auto.matchCount}장 있습니다. 카드를 직접 선택해 주세요`);
       setForm({
         ...blank(),
-        cardId: autoCardId(cards, r.cardNumber),
+        cardId: auto.cardId,
         merchant: r.merchant ?? "",
         amount: r.amount != null ? String(r.amount) : "",
         paidAt: r.paidAt ? toDatetimeLocal(r.paidAt) : toDatetimeLocal(new Date()),
@@ -139,6 +151,7 @@ export default function AddPayment() {
     setUncertain([]);
     setNotice("");
     setError("");
+    setSnack("");
     setForm(blank());
   }
 
@@ -293,6 +306,16 @@ export default function AddPayment() {
         </form>
       )}
       {!form && !reading && error && <p className="text-sm text-red-600">{error}</p>}
+
+      {snack && (
+        <div
+          role="alert"
+          onClick={() => setSnack("")}
+          className="fixed inset-x-4 bottom-[calc(env(safe-area-inset-bottom)+5rem)] z-20 mx-auto max-w-md cursor-pointer rounded-lg bg-red-600 px-4 py-3 text-sm text-white shadow-lg"
+        >
+          {snack}
+        </div>
+      )}
     </>
   );
 }
