@@ -3,8 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { btnPrimary, btnSecondary, h1, input, label } from "../components/ui";
 import { autoCardId } from "../lib/cards";
 import { fromDatetimeLocal, toDatetimeLocal } from "../lib/dates";
-import { insertPayment, listCardBalances } from "../lib/db";
-import { recognizeReceipt } from "../lib/ocr";
+import { getOcrQuota, insertPayment, listCardBalances } from "../lib/db";
+import { OcrError, recognizeReceipt } from "../lib/ocr";
 import type { CardBalance, PaymentSource } from "../lib/types";
 
 interface Form {
@@ -24,6 +24,13 @@ const OCR_FIELD: Partial<Record<keyof Form, string>> = {
   amount: "amount",
   paidAt: "paidAt",
 };
+
+/** 두 제공자의 무료 한도가 모두 떨어졌을 때 쓰는 문구. 말풍선과 인식 실패 안내가 같은 문구를 쓴다. */
+const QUOTA_MESSAGE = "이번 달 영수증 인식 한도를 모두 썼습니다. 직접 입력을 이용해 주세요";
+
+/** 한도 소진 시 "영수증 입력" 버튼 모양. disabled 를 쓰면 탭 이벤트가 오지 않아 안내를 띄울 수 없다. */
+const btnBlocked =
+  "min-h-11 w-full cursor-not-allowed rounded-lg border border-slate-300 bg-white px-4 font-semibold text-slate-400";
 
 /** 확신 없는 칸 아래에 붙는 안내. */
 function Check({ on }: { on: boolean }) {
@@ -51,6 +58,9 @@ export default function AddPayment() {
   const [busy, setBusy] = useState(false);
   // OCR 이 확신하지 못한 필드 이름들. 사용자가 그 칸을 고치면 빠진다.
   const [uncertain, setUncertain] = useState<string[]>([]);
+  // 두 제공자의 무료 한도가 모두 떨어졌는가. 한도를 못 읽었으면 false 로 두어 버튼을 막지 않는다.
+  const [quotaGone, setQuotaGone] = useState(false);
+  const [tip, setTip] = useState(false);
   // 스펙 결정 6: 사진 File 은 저장 완료까지 보관한다(나중에 업로드 단계를 끼울 자리).
   const photoRef = useRef<File | null>(null);
 
@@ -58,7 +68,19 @@ export default function AddPayment() {
     listCardBalances()
       .then(setCards)
       .catch((e) => setError((e as Error).message));
+    // 읽기에 실패하면 막지 않는다. 그때는 인식 시도 중 429 를 받고 안내한다.
+    getOcrQuota()
+      .then((q) => setQuotaGone(!q.available))
+      .catch(() => {});
   }, []);
+
+  // 말풍선은 화면 아무 데나 누르면 닫힌다(버튼 자신의 클릭은 아래에서 전파를 막는다).
+  useEffect(() => {
+    if (!tip) return;
+    const close = () => setTip(false);
+    document.addEventListener("click", close);
+    return () => document.removeEventListener("click", close);
+  }, [tip]);
 
   function set<K extends keyof Form>(key: K, value: Form[K]) {
     setForm((f) => ({ ...(f ?? blank()), [key]: value }));
@@ -89,8 +111,10 @@ export default function AddPayment() {
         ocrCardNumber: r.cardNumber,
         source: "receipt",
       });
-    } catch {
-      setNotice("영수증을 읽지 못했습니다. 직접 입력해 주세요");
+    } catch (err) {
+      const exceeded = (err as OcrError).code === "quota_exceeded";
+      if (exceeded) setQuotaGone(true);
+      setNotice(exceeded ? QUOTA_MESSAGE : "영수증을 읽지 못했습니다. 직접 입력해 주세요");
       setUncertain([]);
       setForm(blank());
     } finally {
@@ -138,16 +162,39 @@ export default function AddPayment() {
     <>
       <h1 className={h1}>결제 추가</h1>
       <div className="mb-4 grid grid-cols-2 gap-3">
-        <label className={`${btnSecondary} flex cursor-pointer items-center justify-center`}>
-          영수증 입력
-          <input
-            type="file"
-            accept="image/*"
-            className="sr-only"
-            onChange={onPhoto}
-            disabled={reading}
-          />
-        </label>
+        <div className="relative">
+          <label
+            className={`${quotaGone ? btnBlocked : `${btnSecondary} w-full cursor-pointer`} flex h-full items-center justify-center`}
+            aria-disabled={quotaGone || undefined}
+            onClick={quotaGone
+              ? (e) => {
+                  e.stopPropagation(); // 아래 document 리스너가 곧바로 닫지 않도록
+                  setTip((v) => !v);
+                }
+              : undefined}
+          >
+            영수증 입력
+            {/* 한도가 떨어지면 input 을 두지 않는다. 라벨만 남아 파일 선택 창이 열리지 않는다. */}
+            {!quotaGone && (
+              <input
+                type="file"
+                accept="image/*"
+                className="sr-only"
+                onChange={onPhoto}
+                disabled={reading}
+              />
+            )}
+          </label>
+          {tip && (
+            <div
+              role="status"
+              className="absolute inset-x-0 top-full z-10 mt-2 rounded-lg bg-slate-900 px-3 py-2 text-sm text-white"
+            >
+              <span className="absolute -top-1 left-6 size-2 rotate-45 bg-slate-900" />
+              {QUOTA_MESSAGE}
+            </div>
+          )}
+        </div>
         <button type="button" className={btnSecondary} onClick={startManual} disabled={reading}>
           직접 입력
         </button>

@@ -53,3 +53,21 @@ export interface CardInput {
   initial_balance: number;
   card_prefix: string | null;
 }
+
+/** RPC ocr_quota() 의 제공자별 상태. 한도는 프로젝트 API 키에 붙으므로 사용자별이 아니다. */
+export interface ProviderQuota {
+  provider: string;
+  /** 'YYYY-MM'(월 한도) 또는 'YYYY-MM-DD'(일 한도), KST */
+  period: string;
+  used: number;
+  limit_count: number;
+  remaining: number;
+  available: boolean;
+}
+
+/** RPC ocr_quota() 반환값. available 은 두 제공자 중 하나라도 쓸 수 있으면 true. */
+export interface OcrQuota {
+  available: boolean;
+  clova: ProviderQuota;
+  gemini: ProviderQuota;
+}

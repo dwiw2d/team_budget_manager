@@ -1,5 +1,5 @@
 import { supabase } from "./supabase";
-import type { CardBalance, CardInput, NewPayment, PaymentWithCard } from "./types";
+import type { CardBalance, CardInput, NewPayment, OcrQuota, PaymentWithCard } from "./types";
 
 const PAYMENT_WITH_CARD = "*, cards(name)";
 
@@ -90,4 +90,11 @@ export async function purgeOldPayments(): Promise<number> {
   const { data, error } = await supabase.rpc("purge_old_payments");
   if (error) throw error;
   return (data as number) ?? 0;
+}
+
+/** 영수증 인식 무료 한도 상태 RPC. 둘 다 소진이면 available 이 false 다. */
+export async function getOcrQuota(): Promise<OcrQuota> {
+  const { data, error } = await supabase.rpc("ocr_quota");
+  if (error) throw error;
+  return data as OcrQuota;
 }
