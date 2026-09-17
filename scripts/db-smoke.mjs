@@ -8,6 +8,8 @@
 //   같은 이유로 auth.uid() 가 기본적으로 null 이라 owner_id 는 auth.users 의 기존 사용자(sb:seed-owner 로 만든 계정) id 를 쓴다.
 //   auth.uid() 를 요구하는 RPC(roll_over_balances, purge_old_payments)는 null 일 때 0 을 돌려주는지 먼저 본 다음,
 //   set_config('request.jwt.claims', ...) 으로 sub 클레임을 트랜잭션 안에서만 심어 실제 동작을 확인한다.
+// - (j)~(m) 은 OCR 무료 한도(ocr_limits/ocr_usage, 0005) 규칙이다. 한도는 사용자별이 아니라 프로젝트 전체이므로
+//   시작 상태를 ocr_usage 를 비워 고정한 뒤 센다. 이 삭제도 같은 트랜잭션이라 롤백된다.
 process.loadEnvFile(".env.local");
 
 function need(key) {
@@ -32,6 +34,8 @@ declare
   bal bigint;
   bmonth date;
   n integer;
+  i integer;
+  quota jsonb;
   ok boolean;
   detail text;
   period_start date := (date_trunc('month', now() at time zone 'Asia/Seoul'))::date;
@@ -132,6 +136,51 @@ begin
   ok := ok and (n = 1);
   detail := detail || format('; 1개월 전 결제 남은 건수=%s (기대 1)', n);
   results := results || jsonb_build_object('item', 'i', 'ok', ok, 'detail', detail);
+
+  -- (j) ocr_quota_consume(): 한도까지 부르면 available 이 false 가 된다(Gemini 하루 20건).
+  --     한도는 사용자별이 아니라 프로젝트 전체라 실 사용량이 섞이지 않게 시작 상태를 비우고 센다(롤백됨).
+  delete from public.ocr_usage;
+  select limit_count into n from public.ocr_limits where provider = 'gemini';
+  ok := true;
+  for i in 1..n loop
+    if not public.ocr_quota_consume('gemini') then ok := false; end if;
+  end loop;
+  quota := public.ocr_quota();
+  ok := ok and not public.ocr_quota_consume('gemini')
+    and (quota->'gemini'->>'available')::boolean = false
+    and (quota->'gemini'->>'used')::integer = n
+    and (quota->'gemini'->>'remaining')::integer = 0;
+  results := results || jsonb_build_object('item', 'j', 'ok', ok,
+    'detail', format('gemini %s건 소진 후 available=%s/used=%s/remaining=%s (기대 false/%s/0), 한 건 더 소비=false 기대',
+      n, quota->'gemini'->>'available', quota->'gemini'->>'used', quota->'gemini'->>'remaining', n));
+
+  -- (k) ocr_quota 의 최상위 available 은 둘 중 하나라도 살아 있으면 true 다(지금은 CLOVA 가 살아 있다)
+  results := results || jsonb_build_object('item', 'k', 'ok', (quota->>'available')::boolean,
+    'detail', format('gemini 소진·clova 여유일 때 최상위 available=%s (기대 true)', quota->>'available'));
+
+  -- (l) ocr_quota_exhaust(): 우리 계수가 남아 있어도 즉시 false 가 된다. 그러면 최상위도 false 다.
+  perform public.ocr_quota_exhaust('clova');
+  quota := public.ocr_quota();
+  ok := (quota->'clova'->>'available')::boolean = false
+    and (quota->'clova'->>'used')::integer = 0
+    and (quota->>'available')::boolean = false;
+  results := results || jsonb_build_object('item', 'l', 'ok', ok,
+    'detail', format('exhaust 후 clova available=%s/used=%s (기대 false/0), 최상위 available=%s (기대 false)',
+      quota->'clova'->>'available', quota->'clova'->>'used', quota->>'available'));
+
+  -- (m) 기간 문자열이 바뀌면 다시 available 이 true 다(지난달·어제 기간 행은 이번 기간에 영향을 주지 않는다)
+  update public.ocr_usage set period = to_char((now() at time zone 'Asia/Seoul') - interval '1 month', 'YYYY-MM')
+   where provider = 'clova';
+  update public.ocr_usage set period = to_char((now() at time zone 'Asia/Seoul') - interval '1 day', 'YYYY-MM-DD')
+   where provider = 'gemini';
+  quota := public.ocr_quota();
+  ok := (quota->>'available')::boolean
+    and (quota->'clova'->>'available')::boolean
+    and (quota->'gemini'->>'available')::boolean
+    and (quota->'gemini'->>'used')::integer = 0;
+  results := results || jsonb_build_object('item', 'm', 'ok', ok,
+    'detail', format('지난 기간 행만 남겼을 때 clova available=%s, gemini available=%s/used=%s, 최상위=%s (모두 true, used 0 기대)',
+      quota->'clova'->>'available', quota->'gemini'->>'available', quota->'gemini'->>'used', quota->>'available'));
 
   raise exception 'ROLLBACK_OK %', results::text;
 end
