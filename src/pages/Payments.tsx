@@ -4,13 +4,13 @@ import { btnDanger, btnPrimary, btnText, h1, input, label } from "../components/
 import { addMonths, formatKst, monthLabel, monthRange, todayKst } from "../lib/dates";
 import {
   cancelPayment,
-  getReceiptImage,
+  getReceiptUrl,
   listCardBalances,
   listPaymentsByMonth,
   updatePaymentMemo,
 } from "../lib/db";
 import { formatWon } from "../lib/money";
-import type { CardBalance, PaymentWithCard, ReceiptImage } from "../lib/types";
+import type { CardBalance, PaymentWithCard } from "../lib/types";
 
 function Row({ k, v }: { k: string; v: string }) {
   return (
@@ -51,13 +51,14 @@ function Sheet({
   const [memo, setMemo] = useState(p.memo ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  // 사진은 시트를 열 때 한 번만 읽는다. 없거나(직접 입력) 읽기에 실패하면 아무것도 그리지 않는다.
-  const [photo, setPhoto] = useState<ReceiptImage | null>(null);
+  // 사진은 시트를 열 때 저장소의 서명 URL 을 한 번만 받는다.
+  // 없거나(직접 입력) 받지 못하면 아무것도 그리지 않는다.
+  const [photo, setPhoto] = useState<string | null>(null);
   const [zoom, setZoom] = useState(false);
   const canceled = !!p.canceled_at;
 
   useEffect(() => {
-    getReceiptImage(p.id)
+    getReceiptUrl(p.id)
       .then(setPhoto)
       .catch(() => {});
   }, [p.id]);
@@ -104,7 +105,7 @@ function Sheet({
         {photo && (
           <button type="button" className="mb-4 block w-full" onClick={() => setZoom(true)}>
             <img
-              src={photo.data_url}
+              src={photo}
               alt="영수증 사진"
               className="max-h-64 w-full rounded-lg border border-slate-200 object-contain"
             />
@@ -136,7 +137,7 @@ function Sheet({
             </button>
           )}
         </div>
-        {zoom && photo && <Zoom src={photo.data_url} onClose={() => setZoom(false)} />}
+        {zoom && photo && <Zoom src={photo} onClose={() => setZoom(false)} />}
       </div>
     </div>
   );

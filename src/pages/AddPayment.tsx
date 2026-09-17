@@ -3,8 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { btnPrimary, btnSecondary, h1, input, label } from "../components/ui";
 import { autoCardId } from "../lib/cards";
 import { fromDatetimeLocal, toDatetimeLocal } from "../lib/dates";
-import { getOcrQuota, insertPayment, insertReceiptImage, listCardBalances } from "../lib/db";
-import { resizeToDataUrl, STORAGE_MAX_EDGE, STORAGE_QUALITY } from "../lib/image";
+import { getOcrQuota, insertPayment, listCardBalances, uploadReceipt } from "../lib/db";
+import { resizeToBlob, STORAGE_MAX_EDGE, STORAGE_QUALITY } from "../lib/image";
 import { OcrError, recognizeReceipt } from "../lib/ocr";
 import type { CardBalance, PaymentSource } from "../lib/types";
 
@@ -51,8 +51,8 @@ const blank = (): Form => ({
 /** 사진 보관은 결제의 덤이다. 실패해도 이미 저장된 결제를 되돌리지 않고 안내 한 줄만 남긴다. */
 async function saveReceiptPhoto(paymentId: string, file: File) {
   try {
-    const { dataUrl, width, height } = await resizeToDataUrl(file, STORAGE_MAX_EDGE, STORAGE_QUALITY);
-    await insertReceiptImage(paymentId, dataUrl, width, height);
+    const { blob } = await resizeToBlob(file, STORAGE_MAX_EDGE, STORAGE_QUALITY);
+    await uploadReceipt(paymentId, blob);
   } catch {
     // 곧바로 홈으로 넘어가므로 화면 안내로는 보이지 않는다.
     window.alert("결제는 저장했지만 영수증 사진은 보관하지 못했습니다");
@@ -73,7 +73,7 @@ export default function AddPayment() {
   // 두 제공자의 무료 한도가 모두 떨어졌는가. 한도를 못 읽었으면 false 로 두어 버튼을 막지 않는다.
   const [quotaGone, setQuotaGone] = useState(false);
   const [tip, setTip] = useState(false);
-  // 사진 File 은 저장이 끝날 때까지 들고 있다가 결제 id 를 받은 뒤 receipt_images 에 넣는다.
+  // 사진 File 은 저장이 끝날 때까지 들고 있다가 결제 id 를 받은 뒤 저장소에 올린다.
   const photoRef = useRef<File | null>(null);
 
   useEffect(() => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-// canvas 가 없는 환경이라 resizeToDataUrl 은 부르지 않는다. 순수 함수만 본다.
+// canvas 가 없는 환경이라 resizeToDataUrl·resizeToBlob 은 부르지 않는다. 순수 함수만 본다.
 import { scaleFor, stripDataUrlPrefix } from "./image";
 
 describe("stripDataUrlPrefix", () => {
@@ -27,5 +27,11 @@ describe("scaleFor", () => {
     const s = scaleFor(3000, 2000, 1200);
     expect(Math.round(3000 * s)).toBe(1200);
     expect(Math.round(2000 * s)).toBe(800);
+  });
+
+  // 보관(1200)과 OCR(1600)이 같은 함수를 쓴다. 기준이 달라도 규칙은 같아야 한다.
+  it("maxEdge 가 달라도 긴 변이 그 값에 맞는다", () => {
+    expect(Math.round(4000 * scaleFor(4000, 3000, 1600))).toBe(1600);
+    expect(Math.round(4000 * scaleFor(4000, 3000, 1200))).toBe(1200);
   });
 });
