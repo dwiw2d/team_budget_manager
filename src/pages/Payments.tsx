@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import PaymentRow from "../components/PaymentRow";
 import { btnDanger, btnPrimary, btnText, h1, input, label } from "../components/ui";
 import { addMonths, formatKst, monthLabel, monthRange, todayKst } from "../lib/dates";
@@ -12,11 +12,11 @@ import {
 import { formatWon } from "../lib/money";
 import type { CardBalance, PaymentWithCard } from "../lib/types";
 
-function Row({ k, v }: { k: string; v: string }) {
+function Row({ k, v, children }: { k: string; v?: string; children?: ReactNode }) {
   return (
     <div className="flex justify-between gap-3">
       <dt className="text-slate-500">{k}</dt>
-      <dd className="text-right text-slate-900">{v}</dd>
+      <dd className="text-right text-slate-900">{children ?? v}</dd>
     </div>
   );
 }
@@ -101,16 +101,33 @@ function Sheet({
           <Row k="출처" v={p.source === "receipt" ? "영수증" : "직접 입력"} />
           {p.ocr_card_number && <Row k="영수증 카드번호" v={p.ocr_card_number} />}
           {p.canceled_at && <Row k="상태" v={`취소됨 (${formatKst(p.canceled_at)})`} />}
+          {photo && (
+            <Row k="영수증 사진">
+              <button
+                type="button"
+                className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-slate-200 text-slate-900"
+                onClick={() => setZoom(true)}
+                aria-label="영수증 사진 크게 보기"
+              >
+                <svg
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <rect x="3" y="4" width="18" height="16" rx="3" />
+                  <circle cx="8.5" cy="9.5" r="1.75" />
+                  <path d="M4 17.5l4.5-4.5 3.5 3.5 3-3 5 5" />
+                </svg>
+              </button>
+            </Row>
+          )}
         </dl>
-        {photo && (
-          <button type="button" className="mb-4 block w-full" onClick={() => setZoom(true)}>
-            <img
-              src={photo}
-              alt="영수증 사진"
-              className="max-h-64 w-full rounded-lg border border-slate-200 object-contain"
-            />
-          </button>
-        )}
         <label className="block">
           <span className={label}>메모</span>
           <textarea
