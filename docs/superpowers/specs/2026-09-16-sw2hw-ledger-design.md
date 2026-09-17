@@ -20,6 +20,7 @@
 | 4-2 | 예산은 언제든 수정 가능하되 이번 달 잔액은 바뀌지 않는다. 다음 달 1일부터 적용된다 |
 | 5 | 결제 = 카드, 가맹점, 금액, 결제 일시, 메모(선택), 영수증에서 읽은 카드번호 일부, 출처(receipt/manual) |
 | 5-1 | OCR 은 두 단계다. 1단계 CLOVA General OCR + 자체 파서, 2단계는 파서가 확신하지 못한 필드가 있을 때만 Gemini 로 보완한다. 유료 영수증 전용 모델은 쓰지 않는다 |
+| 5-3 | 두 OCR 제공자의 무료 한도(CLOVA 월 100건, Gemini 하루 20건, KST)는 물어볼 API 가 없어 우리가 직접 센다. 둘 다 소진이면 제공자를 부르지 않고 429 다 |
 | 5-2 | 카드 자동 선택은 카드번호 **앞자리**로 맞춘다. 한국 카드전표는 뒤 4자리를 가리므로(실측 "4265-86**-****-****", "42658698********") 뒤 4자리로는 영영 맞출 수 없다 |
 | 6 | 영수증 사진은 OCR 후 버림. 촬영 흐름은 저장 직전까지 File 객체를 유지해 나중에 업로드 단계를 끼울 수 있게 함 |
 | 7 | 온라인 전용 PWA. 오프라인이면 안내 배너만 |
@@ -44,9 +45,9 @@
 - 로컬 비밀 값은 `.env.local`(git 무시)에 있다. 키 이름: `SUPABASE_ACCESS_TOKEN`, `SUPABASE_PROJECT_REF`, `SUPABASE_DB_PASSWORD`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `APP_OWNER_EMAIL`, `APP_OWNER_PASSWORD`, (아침에 추가) `NAVER_OCR_GENERAL_INVOKE_URL`, `NAVER_OCR_GENERAL_SECRET`, (선택) `GEMINI_API_KEY`, `GEMINI_MODEL`. **값을 로그·커밋·문서에 절대 출력하지 않는다.**
 - Supabase 프로젝트 ref `owxbsjsetesazmnqvzxd`(도쿄). CLI는 `npx supabase`(2.117.0)로 실행하고 `SUPABASE_ACCESS_TOKEN` 환경 변수를 넘긴다.
 
-## 4. 데이터 모델 (마이그레이션 `supabase/migrations/0001_init.sql` + `0002_reset_at.sql` + `0003_card_prefix.sql` + `0004_stored_balance.sql`)
+## 4. 데이터 모델 (마이그레이션 `supabase/migrations/0001_init.sql` + `0002_reset_at.sql` + `0003_card_prefix.sql` + `0004_stored_balance.sql` + `0005_ocr_quota.sql`)
 
-아래 DDL이 계약이다. 컬럼 이름을 바꾸지 않는다. 마이그레이션은 `0001` ~ `0004` 네 개이고, 클라우드에 적용된 파일은 수정하지 않으며 이후 변경은 번호를 올린 파일로 쌓는다. `0002_reset_at.sql` 이 `cards.reset_date date` 를 `cards.reset_at timestamptz` 로 바꿨고, `0003_card_prefix.sql` 이 `cards.last4` 를 `cards.card_prefix` 로 바꿨다(영수증이 뒤 4자리를 가리므로 앞자리로 맞춘다). `0004_stored_balance.sql` 이 잔액을 저장값으로 바꾼다: `cards.balance`·`cards.balance_month` 를 더하고 `cards.reset_at` 을 없애며, 결제 트리거·`roll_over_balances()`·뷰를 새로 만든다. 아래는 네 마이그레이션을 적용한 최종 형태다.
+아래 DDL이 계약이다. 컬럼 이름을 바꾸지 않는다. 마이그레이션은 `0001` ~ `0005` 다섯 개이고, 클라우드에 적용된 파일은 수정하지 않으며 이후 변경은 번호를 올린 파일로 쌓는다. `0002_reset_at.sql` 이 `cards.reset_date date` 를 `cards.reset_at timestamptz` 로 바꿨고, `0003_card_prefix.sql` 이 `cards.last4` 를 `cards.card_prefix` 로 바꿨다(영수증이 뒤 4자리를 가리므로 앞자리로 맞춘다). `0004_stored_balance.sql` 이 잔액을 저장값으로 바꾼다: `cards.balance`·`cards.balance_month` 를 더하고 `cards.reset_at` 을 없애며, 결제 트리거·`roll_over_balances()`·뷰를 새로 만든다. `0005_ocr_quota.sql` 이 OCR 무료 한도용 `ocr_limits`·`ocr_usage` 두 표와 `ocr_period`·`ocr_quota`·`ocr_quota_consume`·`ocr_quota_exhaust` 네 함수를 더한다(§5 참조). 아래는 장부 쪽 네 마이그레이션을 적용한 최종 형태다.
 
 **매월 채움을 스케줄러 없이 구현한 방법**: `pg_cron` 같은 배치를 두지 않고, 잔액 기간이 지난 카드를 손대는 세 순간에 각각 넘긴다 — (1) 결제 트리거가 잔액을 조정하기 직전, (2) 앱 진입 시 `roll_over_balances()` RPC, (3) 그래도 아직 안 넘어간 카드를 위해 뷰 `card_balances` 가 조회 시 예산으로 보정해서 낸다.
 
@@ -138,6 +139,10 @@ return 삭제 건수;
 - 파서와 Gemini 모듈은 `supabase/functions/ocr/{clova-general,gemini,merge}.ts`에 Deno 의존성 없는 순수 TS로 두고 Vitest로 테스트한다(`*.fixtures.ts`는 실제 응답에서 옮긴 것). `scripts/ocr-bench/lib/*-extract.mjs`는 이 `.ts` 를 재수출하는 껍데기다.
 - 오류: 시크릿 없음(`NAVER_OCR_GENERAL_INVOKE_URL` 또는 `NAVER_OCR_GENERAL_SECRET` 미설정) → 503 `{ "error": "ocr_not_configured" }`. **1단계와 2단계가 모두 실패**(또는 1단계 실패 + `GEMINI_API_KEY` 없음) → 502 `{ "error": "ocr_failed" }`. 1단계만 실패하고 2단계가 성공하면 200 이다.
 - 오류: **네 필드(`merchant`, `paidAt`, `amount`, `cardNumber`)를 하나도 못 읽으면**(영수증이 아닌 사진이라 2단계가 전부 null 을 돌려준 경우 포함) 어느 경로로 왔든 성공이 아니라 502 `{ "error": "ocr_failed" }` 다. 이 판단도 `merge.ts`의 `resolve` 안에 있다.
+- **무료 한도**(`0005_ocr_quota.sql`): 두 제공자 모두 남은 무료 한도를 물어볼 수 있는 API 가 없으므로 우리가 직접 센다. 확정된 한도는 CLOVA General OCR **월 100건**, Gemini **하루 20건**이고 기간은 모두 한국 시간 기준이다. 한도는 프로젝트의 API 키에 붙는 것이라 사용자별이 아니다(`owner_id` 없음). 한도 값은 코드가 아니라 `ocr_limits(provider, period_kind, limit_count)` 표에 있어 대시보드에서 고칠 수 있다. 사용량은 `ocr_usage(provider, period, used, exhausted_at)` 에 기간 문자열(`YYYY-MM` 또는 `YYYY-MM-DD`, KST)별로 쌓인다. 기간이 바뀌면 키가 달라져 새 행이 생기므로 따로 초기화하지 않는다. 두 표는 RLS 를 켜고 `authenticated` 에 select 만 열며, 쓰기는 `security definer` 함수 `ocr_quota_consume(provider)`·`ocr_quota_exhaust(provider)` 로만 한다. 상태 조회는 `ocr_quota()` 로, 제공자별 `{provider, period, used, limit_count, remaining, available}` 과 최상위 `available`(둘 중 하나라도 쓸 수 있으면 true)을 돌려준다.
+- **한도 판단과 소비 시점**: 어느 제공자를 부를 수 있는지는 `index.ts` 가 아니라 순수 함수 `quota.ts` 의 `decideProviders(quota)` 가 정하고 Vitest 로 네 경우(둘 다 가능 / CLOVA 만 / Gemini 만 / 둘 다 불가)를 덮는다. 제공자를 **부르기 직전에** `ocr_quota_consume` 으로 1건을 선차감한다(응답이 유실돼도 과금분이 세어지도록). false 가 오면 그 제공자를 건너뛴다. 제공자가 한도 초과로 보이는 응답(HTTP 429, 또는 오류 응답의 코드·메시지에 quota/limit/exceed/초과)을 주면 `quota.ts` 의 `isQuotaExceeded` 가 그것을 알아보고 `ocr_quota_exhaust` 로 그 기간을 닫은 뒤 다음 제공자로 넘어간다. 그 밖의 실패는 기존 폴백 경로 그대로다. CLOVA 가 소진이고 Gemini 만 남으면 Gemini 가 주 엔진이 되며, 결과는 "1단계 실패 후 Gemini" 경로와 같게 값이 있는 필드를 모두 `uncertain` 에 넣는다.
+- 오류: **두 제공자를 모두 부를 수 없으면**(처음부터 소진이거나 처리 도중 소진된 경우 포함) 제공자를 부르지 않고 429 `{ "error": "ocr_quota_exceeded" }` 다. 화면은 이 코드일 때만 한도 안내를 띄운다(`src/lib/ocr.ts` 의 순수 함수 `ocrErrorCode`).
+- `NAVER_OCR_MOCK=1` 은 제공자를 부르지 않으므로 한도 검사보다 앞에 둔다(세지도, 막지도 않는다).
 - `NAVER_OCR_MOCK=1`이 설정된 경우에만 아무것도 호출하지 않고 CLOVA 픽스처를 파서에 통과시킨 고정 응답을 돌려준다(QA 전용, 클라우드에는 설정하지 않음).
 - 시크릿 등록은 `npm run sb:secrets`(`.env.local`에 있는 `NAVER_OCR_GENERAL_INVOKE_URL`, `NAVER_OCR_GENERAL_SECRET`, `GEMINI_API_KEY`, `GEMINI_MODEL` 중 존재하는 값만 `supabase secrets set`으로 올리고 이름만 출력).
 
@@ -147,7 +152,7 @@ return 삭제 건수;
 
 1. **로그인 `/login`**: 앱 이름, 안내 문구 "PIN 6자리를 입력하세요", PIN 입력 하나(`type=password`, `inputMode=numeric`, 최대 6자, 숫자만 남기고 가운데 정렬·자간 확대), 로그인 버튼. 이메일은 코드 상수 `owner@sw2hw.local`. 6자리가 채워지면 자동으로 로그인을 시도하고, 버튼은 6자리가 아니면 비활성. 실패 시 "PIN이 올바르지 않습니다"와 함께 입력을 비운다. 성공 시 `/`. 세션은 supabase-js 기본(localStorage)으로 유지.
 2. **홈 `/`(대시보드)**: 상단 총 잔액(큰 글씨), 카드별 잔액 목록(이름, 카드번호 앞자리, 잔액. 음수는 빨간색), 최근 결제 5건(가맹점, 금액, 카드 이름, 일시. 취소 건은 취소선). 진입 시 `roll_over_balances` → `purge_old_payments` RPC 를 차례로 호출한 뒤 데이터 로드(둘 다 실패해도 화면은 진행).
-3. **결제 추가 `/add`**: 상단에 "영수증 입력"(`<input type="file" accept="image/*">`)과 "직접 입력" 두 버튼. 사진을 고르면 canvas로 긴 변 1600px, JPEG 0.85로 줄여 base64로 `ocr` 함수 호출, "영수증을 읽는 중…" 표시. 결과로 폼을 채우고 OCR이 읽은 카드번호를 읽기 전용으로 표시. 카드 자동 선택: 읽은 번호에서 공백·하이픈을 걷어낸 뒤 첫 마스킹 문자 앞까지의 연속된 숫자를 뽑아 카드의 `card_prefix`와 앞에서부터 비교한다. 비교 길이는 둘 중 짧은 쪽이며 6자리 미만이면 선택하지 않는다. 정확히 한 장만 일치할 때만 선택. 폼: 카드(select, 필수), 가맹점(필수), 금액(필수, 양의 정수), 결제 일시(`datetime-local`, 기본 지금), 메모(선택). 응답의 `uncertain`에 든 필드의 입력은 호박색 테두리(`border-amber-500`)와 그 아래 작은 안내("확인해 주세요")로 표시하고, 사용자가 그 칸을 고치면 표시를 지운다(`cardNumber`는 카드 선택 칸에 표시). 저장 → insert(`source`는 사진을 고르면 `receipt`, 아니면 `manual`; OCR 실패 후 직접 입력해도 `manual`) → 홈으로. OCR 실패(503/502/네트워크)는 "영수증을 읽지 못했습니다. 직접 입력해 주세요" 후 빈 폼.
+3. **결제 추가 `/add`**: 상단에 "영수증 입력"(`<input type="file" accept="image/*">`)과 "직접 입력" 두 버튼. 사진을 고르면 canvas로 긴 변 1600px, JPEG 0.85로 줄여 base64로 `ocr` 함수 호출, "영수증을 읽는 중…" 표시. 결과로 폼을 채우고 OCR이 읽은 카드번호를 읽기 전용으로 표시. 카드 자동 선택: 읽은 번호에서 공백·하이픈을 걷어낸 뒤 첫 마스킹 문자 앞까지의 연속된 숫자를 뽑아 카드의 `card_prefix`와 앞에서부터 비교한다. 비교 길이는 둘 중 짧은 쪽이며 6자리 미만이면 선택하지 않는다. 정확히 한 장만 일치할 때만 선택. 폼: 카드(select, 필수), 가맹점(필수), 금액(필수, 양의 정수), 결제 일시(`datetime-local`, 기본 지금), 메모(선택). 응답의 `uncertain`에 든 필드의 입력은 호박색 테두리(`border-amber-500`)와 그 아래 작은 안내("확인해 주세요")로 표시하고, 사용자가 그 칸을 고치면 표시를 지운다(`cardNumber`는 카드 선택 칸에 표시). 저장 → insert(`source`는 사진을 고르면 `receipt`, 아니면 `manual`; OCR 실패 후 직접 입력해도 `manual`) → 홈으로. OCR 실패(503/502/네트워크)는 "영수증을 읽지 못했습니다. 직접 입력해 주세요" 후 빈 폼. 화면에 들어올 때 `ocr_quota` 를 읽어 두 제공자가 모두 소진이면 "영수증 입력" 버튼을 비활성 모양으로 둔다(`disabled` 속성은 쓰지 않는다 — 비활성 버튼은 탭 이벤트가 오지 않아 안내를 띄울 수 없다. `aria-disabled="true"` + slate-300/slate-400 회색 + `cursor-not-allowed`, 파일 선택 창은 열지 않는다). 누르면 버튼 바로 아래에 말풍선(`role="status"`, 어두운 배경·흰 글씨·위쪽 삼각형 꼭지)으로 "이번 달 영수증 인식 한도를 모두 썼습니다. 직접 입력을 이용해 주세요" 를 띄우고, 다시 누르거나 다른 곳을 누르면 닫는다. 한도 읽기에 실패하면 버튼을 막지 않는다. 인식 중 429 `ocr_quota_exceeded` 를 받으면 같은 문구를 기존 안내 자리에 띄우고 빈 폼으로 넘어간다.
 4. **내역 `/payments`**: 상단 월 이동(◀ 2026년 9월 ▶, 기본 이번 달), 카드 필터(전체/각 카드), 월 합계(취소 제외). 목록은 결제 일시 내림차순. 항목 클릭 → 상세 시트: 모든 필드 읽기 전용, 메모만 편집·저장, "취소" 버튼(확인창: "이 결제를 취소하면 되돌릴 수 없습니다"). 취소된 항목은 취소선 + "취소됨". 월 경계는 KST(+09:00 고정) 기준으로 계산해 `paid_at gte/lt`로 조회.
 5. **카드 `/cards`**: 카드 목록(이름, 카드번호 앞자리, 예산, 잔액). 목록 위에는 "카드 추가" 버튼 하나만 둔다. 카드 추가/수정 모달(이름, 예산, 카드번호 앞자리 선택): 예산 입력 아래에 "예산을 바꾸면 다음 달 1일부터 적용됩니다" 를 작은 글씨로 우측 정렬해 둔다. 앞자리 입력의 라벨은 "카드번호 앞 6~8자리(선택)"이고 그 아래에 "영수증은 뒤 4자리를 가리므로 앞자리로 맞춥니다" 한 줄을 둔다. 숫자 6~8자리가 아니면 저장하지 않는다. 카드 상세 시트: 이름·카드번호 앞자리·예산·잔액을 보여주고 예산 아래에 같은 안내 한 줄을 우측 정렬해 둔다. 버튼은 "수정"·"삭제" 둘뿐이다(`grid-cols-2`). **초기화 버튼은 카드별도 전체도 없다** — 잔액은 매월 1일 0시에 저절로 채워진다. 삭제는 확인창 후 실행하고 FK 오류면 안내.
 6. **설정 `/settings`**: PIN 변경(현재 PIN·새 PIN·새 PIN 확인 3개 입력. 현재 PIN 은 `signInWithPassword`로 확인한 뒤 `auth.updateUser`로 변경), 로그아웃, 앱 버전 표시.
@@ -171,8 +176,8 @@ PWA: manifest `name`/`short_name` "SW2HW 장부", `display: standalone`, `lang: 
 
 ## 9. 테스트 전략
 
-- **Vitest 단위**: `src/lib/money.test.ts`(원 표기), `src/lib/dates.test.ts`(KST 월 경계, datetime-local 변환), `src/lib/cards.test.ts`(앞자리 자동 선택), `supabase/functions/ocr/{clova-general,gemini,merge}.test.ts`(실제 응답 픽스처 → 네 필드 + weak, Gemini 응답 정규화, 병합 규칙).
-- **DB 스모크 `scripts/db-smoke.mjs`**: Management API `POST /v1/projects/{ref}/database/query`(PAT)로 한 트랜잭션 안에서 저장 잔액 규칙 전부를 검증한다 — 결제 삽입 시 `cards.balance` 차감 / 금액 수정 시도(실패 기대) / 취소 시 복구 / 취소 되돌리기 시도(실패 기대) / 지난달 날짜 결제는 잔액 불변 / `balance_month` 가 지난달인 카드에 결제를 넣으면 예산으로 넘어간 뒤 차감 / 예산 수정은 잔액 불변 / `roll_over_balances()` 넘김 / `purge_old_payments()` 3개월 규칙. 마지막에 `raise exception` 으로 강제 롤백하므로 실 데이터에 흔적을 남기지 않는다. (superuser라 RLS는 우회되므로 RLS 자체는 아래 QA가 확인. `auth.uid()` 를 요구하는 RPC 는 `set_config('request.jwt.claims', ...)` 로 트랜잭션 안에서만 sub 클레임을 심어 확인한다)
+- **Vitest 단위**: `src/lib/money.test.ts`(원 표기), `src/lib/dates.test.ts`(KST 월 경계, datetime-local 변환), `src/lib/cards.test.ts`(앞자리 자동 선택), `supabase/functions/ocr/{clova-general,gemini,merge,quota}.test.ts`(실제 응답 픽스처 → 네 필드 + weak, Gemini 응답 정규화, 병합 규칙, 한도 판단), `src/lib/ocr.test.ts`(함수 응답 → 오류 코드).
+- **DB 스모크 `scripts/db-smoke.mjs`**: Management API `POST /v1/projects/{ref}/database/query`(PAT)로 한 트랜잭션 안에서 저장 잔액 규칙 전부를 검증한다 — 결제 삽입 시 `cards.balance` 차감 / 금액 수정 시도(실패 기대) / 취소 시 복구 / 취소 되돌리기 시도(실패 기대) / 지난달 날짜 결제는 잔액 불변 / `balance_month` 가 지난달인 카드에 결제를 넣으면 예산으로 넘어간 뒤 차감 / 예산 수정은 잔액 불변 / `roll_over_balances()` 넘김 / `purge_old_payments()` 3개월 규칙 / OCR 한도(한도까지 `ocr_quota_consume` 하면 `available` 이 false, `ocr_quota_exhaust` 는 즉시 false, 기간 문자열이 바뀌면 다시 true, 최상위 `available` 은 둘 중 하나라도 살아 있으면 true). 마지막에 `raise exception` 으로 강제 롤백하므로 실 데이터에 흔적을 남기지 않는다. (superuser라 RLS는 우회되므로 RLS 자체는 아래 QA가 확인. `auth.uid()` 를 요구하는 RPC 는 `set_config('request.jwt.claims', ...)` 로 트랜잭션 안에서만 sub 클레임을 심어 확인한다)
 - **QA 시나리오(수동, 브라우저)**: 11절 체크리스트 전 항목. QA는 가능하면 로컬 Supabase(`supabase start`, Docker)에서 수행하고, 불가하면 클라우드에서 수행한 뒤 만든 테스트 데이터를 정리한다. RLS 확인: anon 키로 로그인 없이 select → 0건, 로그인 후 delete 시도 → 0건 삭제.
 - **빌드 게이트**: `npm run typecheck`, `npm test`, `npm run build`, `docker build` 모두 성공.
 
@@ -186,8 +191,8 @@ src/
   pages/Login.tsx, Home.tsx, AddPayment.tsx, Payments.tsx, Cards.tsx, Settings.tsx
   components/(공통 소품 최소)
 public/icons/
-supabase/config.toml, migrations/{0001_init,0002_reset_at,0003_card_prefix,0004_stored_balance}.sql
-          functions/ocr/{index.ts,clova-general.ts,gemini.ts,merge.ts,*.fixtures.ts,*.test.ts}
+supabase/config.toml, migrations/{0001_init,0002_reset_at,0003_card_prefix,0004_stored_balance,0005_ocr_quota}.sql
+          functions/ocr/{index.ts,clova-general.ts,gemini.ts,merge.ts,quota.ts,*.fixtures.ts,*.test.ts}
 scripts/{seed-owner,disable-signup,set-secrets,db-smoke}.mjs
 Dockerfile, nginx.conf, docker-compose.yml, README.md
 docs/adr/, docs/superpowers/specs/, docs/scrum/, docs/qa/
@@ -204,6 +209,8 @@ docs/adr/, docs/superpowers/specs/, docs/scrum/, docs/qa/
 - [ ] OCR 이 확신하지 못한 칸은 호박색 테두리 + "확인해 주세요" 표시, 그 칸을 고치면 표시가 사라짐
 - [ ] `GEMINI_API_KEY` 없이 CLOVA 만으로도 영수증 입력 흐름이 끝까지 동작(읽지 못한 칸은 `uncertain` 표시)
 - [ ] OCR 실패 시 안내 후 직접 입력 가능
+- [ ] 무료 한도가 둘 다 소진이면 "영수증 입력" 버튼이 회색 비활성 모양(누를 수는 있음)이고, 누르면 버튼 아래 말풍선으로 한도 안내가 뜨며 다시 누르거나 다른 곳을 누르면 닫힘. 파일 선택 창은 열리지 않음
+- [ ] 인식 도중 429 `ocr_quota_exceeded` 를 받으면 같은 한도 문구를 안내 자리에 띄우고 직접 입력 폼으로 넘어감. "직접 입력" 버튼은 한도와 무관하게 그대로 동작
 - [ ] 내역: 월 이동, 카드 필터, 월 합계(취소 제외), 정렬 최신순
 - [ ] 결제 상세: 메모만 수정 가능, 다른 필드 편집 불가
 - [ ] 결제 취소: 확인창, 취소 후 잔액에 다시 더해짐, 취소선 표시, 되돌리기 불가
