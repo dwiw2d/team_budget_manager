@@ -14,7 +14,7 @@ import type { CardBalance, PaymentWithCard } from "../lib/types";
 
 function Row({ k, v, children }: { k: string; v?: string; children?: ReactNode }) {
   return (
-    <div className="flex justify-between gap-3">
+    <div className="flex items-center justify-between gap-3">
       <dt className="text-slate-500">{k}</dt>
       <dd className="text-right text-slate-900">{children ?? v}</dd>
     </div>
@@ -105,7 +105,7 @@ function Sheet({
             <Row k="영수증 사진">
               <button
                 type="button"
-                className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-slate-200 text-slate-900"
+                className="inline-flex items-center justify-center rounded-md border border-slate-200 p-1 text-slate-900"
                 onClick={() => setZoom(true)}
                 aria-label="영수증 사진 크게 보기"
               >
