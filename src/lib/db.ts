@@ -1,5 +1,12 @@
 import { supabase } from "./supabase";
-import type { CardBalance, CardInput, NewPayment, OcrQuota, PaymentWithCard } from "./types";
+import type {
+  CardBalance,
+  CardInput,
+  NewPayment,
+  OcrQuota,
+  PaymentWithCard,
+  ReceiptImage,
+} from "./types";
 
 const PAYMENT_WITH_CARD = "*, cards(name)";
 
@@ -36,9 +43,34 @@ export async function listPaymentsByMonth(args: {
   return data as PaymentWithCard[];
 }
 
-export async function insertPayment(p: NewPayment): Promise<void> {
-  const { error } = await supabase.from("payments").insert(p);
+/** 새 결제의 id 를 돌려준다. 영수증 사진을 같은 id 로 이어 붙이려면 필요하다. */
+export async function insertPayment(p: NewPayment): Promise<string> {
+  const { data, error } = await supabase.from("payments").insert(p).select("id").single();
   if (error) throw error;
+  return (data as { id: string }).id;
+}
+
+export async function insertReceiptImage(
+  paymentId: string,
+  dataUrl: string,
+  width: number,
+  height: number,
+): Promise<void> {
+  const { error } = await supabase
+    .from("receipt_images")
+    .insert({ payment_id: paymentId, data_url: dataUrl, width, height });
+  if (error) throw error;
+}
+
+/** 상세 시트를 열 때만 부른다. 사진이 없는 결제(직접 입력 등)면 null. */
+export async function getReceiptImage(paymentId: string): Promise<ReceiptImage | null> {
+  const { data, error } = await supabase
+    .from("receipt_images")
+    .select("payment_id, data_url, width, height")
+    .eq("payment_id", paymentId)
+    .maybeSingle();
+  if (error) throw error;
+  return data as ReceiptImage | null;
 }
 
 export async function updatePaymentMemo(id: string, memo: string | null): Promise<void> {

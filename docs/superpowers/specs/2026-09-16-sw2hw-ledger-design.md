@@ -6,7 +6,7 @@
 
 **목표**: 공용 비밀번호 하나로 여러 사람이 접속하는 모바일 우선 PWA. 카드를 등록해 예산을 두고, 영수증 입력(네이버 CLOVA General OCR + 필요할 때만 Gemini 보완) 또는 수동 입력으로 결제를 기록하면 카드 잔액이 줄어든다. 언제든 접속해 총 잔액·카드별 잔액·결제 내역을 본다.
 
-**비목표(만들지 않음)**: 회원가입, 다중 계정, 카테고리·태그, 통계·차트, 영수증 사진 보관, 품목 저장, 오프라인 입력, 입금 기록, 결제 수정·삭제(메모 제외), 사용자가 누르는 초기화 버튼, 검색.
+**비목표(만들지 않음)**: 회원가입, 다중 계정, 카테고리·태그, 통계·차트, 품목 저장, 오프라인 입력, 입금 기록, 결제 수정·삭제(메모 제외), 사용자가 누르는 초기화 버튼, 검색.
 
 ## 2. 확정된 결정 요약
 
@@ -22,7 +22,7 @@
 | 5-1 | OCR 은 두 단계다. 1단계 CLOVA General OCR + 자체 파서, 2단계는 파서가 확신하지 못한 필드가 있을 때만 Gemini 로 보완한다. 유료 영수증 전용 모델은 쓰지 않는다 |
 | 5-3 | 두 OCR 제공자의 무료 한도(CLOVA 월 100건, Gemini 하루 20건, KST)는 물어볼 API 가 없어 우리가 직접 센다. 둘 다 소진이면 제공자를 부르지 않고 429 다 |
 | 5-2 | 카드 자동 선택은 카드번호 **앞자리**로 맞춘다. 한국 카드전표는 뒤 4자리를 가리므로(실측 "4265-86**-****-****", "42658698********") 뒤 4자리로는 영영 맞출 수 없다 |
-| 6 | 영수증 사진은 OCR 후 버림. 촬영 흐름은 저장 직전까지 File 객체를 유지해 나중에 업로드 단계를 끼울 수 있게 함 |
+| 6 | 영수증 사진은 결제와 함께 보관한다. 파일 저장소가 아니라 DB(`receipt_images`)에 긴 변 1200px·JPEG 0.7 의 data URL 로 담고(장당 약 200KB), 결제가 지워지면 cascade 로 함께 사라진다. 결제 표와 나눠 두어 목록 조회는 그대로이고 상세 시트를 열 때만 읽는다 |
 | 7 | 온라인 전용 PWA. 오프라인이면 안내 배너만 |
 | 8 | Vite + React + TypeScript + Tailwind + vite-plugin-pwa + react-router + supabase-js. 상태관리·컴포넌트 라이브러리 없음 |
 | 9 | 프런트 호스팅: GitHub Pages(dwiw2d 계정, 공개 저장소 `team_budget_manager`) + GitHub Actions. Docker(nginx) 이미지도 제공 |
@@ -45,9 +45,9 @@
 - 로컬 비밀 값은 `.env.local`(git 무시)에 있다. 키 이름: `SUPABASE_ACCESS_TOKEN`, `SUPABASE_PROJECT_REF`, `SUPABASE_DB_PASSWORD`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `APP_OWNER_EMAIL`, `APP_OWNER_PASSWORD`, (아침에 추가) `NAVER_OCR_GENERAL_INVOKE_URL`, `NAVER_OCR_GENERAL_SECRET`, (선택) `GEMINI_API_KEY`, `GEMINI_MODEL`. **값을 로그·커밋·문서에 절대 출력하지 않는다.**
 - Supabase 프로젝트 ref `owxbsjsetesazmnqvzxd`(도쿄). CLI는 `npx supabase`(2.117.0)로 실행하고 `SUPABASE_ACCESS_TOKEN` 환경 변수를 넘긴다.
 
-## 4. 데이터 모델 (마이그레이션 `supabase/migrations/0001_init.sql` + `0002_reset_at.sql` + `0003_card_prefix.sql` + `0004_stored_balance.sql` + `0005_ocr_quota.sql`)
+## 4. 데이터 모델 (마이그레이션 `supabase/migrations/0001_init.sql` + `0002_reset_at.sql` + `0003_card_prefix.sql` + `0004_stored_balance.sql` + `0005_ocr_quota.sql` + `0006_receipt_images.sql`)
 
-아래 DDL이 계약이다. 컬럼 이름을 바꾸지 않는다. 마이그레이션은 `0001` ~ `0005` 다섯 개이고, 클라우드에 적용된 파일은 수정하지 않으며 이후 변경은 번호를 올린 파일로 쌓는다. `0002_reset_at.sql` 이 `cards.reset_date date` 를 `cards.reset_at timestamptz` 로 바꿨고, `0003_card_prefix.sql` 이 `cards.last4` 를 `cards.card_prefix` 로 바꿨다(영수증이 뒤 4자리를 가리므로 앞자리로 맞춘다). `0004_stored_balance.sql` 이 잔액을 저장값으로 바꾼다: `cards.balance`·`cards.balance_month` 를 더하고 `cards.reset_at` 을 없애며, 결제 트리거·`roll_over_balances()`·뷰를 새로 만든다. `0005_ocr_quota.sql` 이 OCR 무료 한도용 `ocr_limits`·`ocr_usage` 두 표와 `ocr_period`·`ocr_quota`·`ocr_quota_consume`·`ocr_quota_exhaust` 네 함수를 더한다(§5 참조). 아래는 장부 쪽 네 마이그레이션을 적용한 최종 형태다.
+아래 DDL이 계약이다. 컬럼 이름을 바꾸지 않는다. 마이그레이션은 `0001` ~ `0006` 여섯 개이고, 클라우드에 적용된 파일은 수정하지 않으며 이후 변경은 번호를 올린 파일로 쌓는다. `0002_reset_at.sql` 이 `cards.reset_date date` 를 `cards.reset_at timestamptz` 로 바꿨고, `0003_card_prefix.sql` 이 `cards.last4` 를 `cards.card_prefix` 로 바꿨다(영수증이 뒤 4자리를 가리므로 앞자리로 맞춘다). `0004_stored_balance.sql` 이 잔액을 저장값으로 바꾼다: `cards.balance`·`cards.balance_month` 를 더하고 `cards.reset_at` 을 없애며, 결제 트리거·`roll_over_balances()`·뷰를 새로 만든다. `0005_ocr_quota.sql` 이 OCR 무료 한도용 `ocr_limits`·`ocr_usage` 두 표와 `ocr_period`·`ocr_quota`·`ocr_quota_consume`·`ocr_quota_exhaust` 네 함수를 더한다(§5 참조). `0006_receipt_images.sql` 이 영수증 사진 표 `receipt_images` 를 더한다(아래 참조). 아래는 장부 쪽 다섯 마이그레이션(`0001`~`0004`, `0006`)을 적용한 최종 형태다.
 
 **매월 채움을 스케줄러 없이 구현한 방법**: `pg_cron` 같은 배치를 두지 않고, 잔액 기간이 지난 카드를 손대는 세 순간에 각각 넘긴다 — (1) 결제 트리거가 잔액을 조정하기 직전, (2) 앱 진입 시 `roll_over_balances()` RPC, (3) 그래도 아직 안 넘어간 카드를 위해 뷰 `card_balances` 가 조회 시 예산으로 보정해서 낸다.
 
@@ -78,7 +78,21 @@ create table public.payments (
 );
 create index payments_card_paid_idx on public.payments (card_id, paid_at desc);
 create index payments_owner_paid_idx on public.payments (owner_id, paid_at desc);
+
+-- 0006_receipt_images.sql
+create table public.receipt_images (
+  payment_id uuid primary key references public.payments(id) on delete cascade,
+  owner_id uuid not null default auth.uid() references auth.users(id),
+  data_url text not null check (data_url like 'data:image/%' and length(data_url) between 100 and 600000),
+  width integer,
+  height integer,
+  created_at timestamptz not null default now()
+);
 ```
+
+**표 `receipt_images`**: 영수증 사진을 결제 하나당 한 장 담는다(그래서 `payment_id` 가 그대로 기본 키다). 사진은 파일 저장소가 아니라 DB 에 base64 data URL 문자열로 넣는다 — 자체 서버 이전과 백업이 단순해지고, 결제가 지워지면 `on delete cascade` 로 사진도 함께 사라진다(`purge_old_payments()` 의 3개월 정리도 마찬가지다. 그래서 그 함수는 손대지 않는다). 결제 표에 합치지 않고 나눠 둔 이유는 목록 조회가 무거워지지 않게 하려는 것이다: 목록·홈은 이 표를 읽지 않고 상세 시트를 열 때만 한 행을 읽는다. 앱은 긴 변 1200px·JPEG 품질 0.7 로 줄여 넣어 장당 약 200KB 를 목표한다. 길이 상한 60만 자는 base64 기준 약 450KB 로 그보다 넉넉해 품질 편차를 흡수한다. 수동 입력으로 만든 결제에는 행이 없다.
+
+**RLS(`receipt_images`)**: 활성화. 역할 `authenticated` 에 대해 `owner_id = auth.uid()` 조건으로 select 와 insert 만. update·delete 정책은 없다(사진은 고치지 않고, 삭제는 결제가 지워질 때 cascade 로만 일어난다). `anon` 정책은 없다.
 
 **컬럼 `cards.initial_balance`**: 화면에서 "예산" 으로 부르는 값, 곧 한 달 치 한도다. 컬럼 이름은 `initial_balance` 그대로 둔다.
 
@@ -152,8 +166,8 @@ return 삭제 건수;
 
 1. **로그인 `/login`**: 앱 이름, 안내 문구 "PIN 6자리를 입력하세요", PIN 입력 하나(`type=password`, `inputMode=numeric`, 최대 6자, 숫자만 남기고 가운데 정렬·자간 확대), 로그인 버튼. 이메일은 코드 상수 `owner@sw2hw.local`. 6자리가 채워지면 자동으로 로그인을 시도하고, 버튼은 6자리가 아니면 비활성. 실패 시 "PIN이 올바르지 않습니다"와 함께 입력을 비운다. 성공 시 `/`. 세션은 supabase-js 기본(localStorage)으로 유지.
 2. **홈 `/`(대시보드)**: 상단 총 잔액(큰 글씨), 카드별 잔액 목록(이름, 카드번호 앞자리, 잔액. 음수는 빨간색), 최근 결제 5건(가맹점, 금액, 카드 이름, 일시. 취소 건은 취소선). 진입 시 `roll_over_balances` → `purge_old_payments` RPC 를 차례로 호출한 뒤 데이터 로드(둘 다 실패해도 화면은 진행).
-3. **결제 추가 `/add`**: 상단에 "영수증 입력"(`<input type="file" accept="image/*">`)과 "직접 입력" 두 버튼. 사진을 고르면 canvas로 긴 변 1600px, JPEG 0.85로 줄여 base64로 `ocr` 함수 호출, "영수증을 읽는 중…" 표시. 결과로 폼을 채우고 OCR이 읽은 카드번호를 읽기 전용으로 표시. 카드 자동 선택: 읽은 번호에서 공백·하이픈을 걷어낸 뒤 첫 마스킹 문자 앞까지의 연속된 숫자를 뽑아 카드의 `card_prefix`와 앞에서부터 비교한다. 비교 길이는 둘 중 짧은 쪽이며 6자리 미만이면 선택하지 않는다. 정확히 한 장만 일치할 때만 선택. 폼: 카드(select, 필수), 가맹점(필수), 금액(필수, 양의 정수), 결제 일시(`datetime-local`, 기본 지금), 메모(선택). 응답의 `uncertain`에 든 필드의 입력은 호박색 테두리(`border-amber-500`)와 그 아래 작은 안내("확인해 주세요")로 표시하고, 사용자가 그 칸을 고치면 표시를 지운다(`cardNumber`는 카드 선택 칸에 표시). 저장 → insert(`source`는 사진을 고르면 `receipt`, 아니면 `manual`; OCR 실패 후 직접 입력해도 `manual`) → 홈으로. OCR 실패(503/502/네트워크)는 "영수증을 읽지 못했습니다. 직접 입력해 주세요" 후 빈 폼. 화면에 들어올 때 `ocr_quota` 를 읽어 두 제공자가 모두 소진이면 "영수증 입력" 버튼을 비활성 모양으로 둔다(`disabled` 속성은 쓰지 않는다 — 비활성 버튼은 탭 이벤트가 오지 않아 안내를 띄울 수 없다. `aria-disabled="true"` + slate-300/slate-400 회색 + `cursor-not-allowed`, 파일 선택 창은 열지 않는다). 누르면 버튼 바로 아래에 말풍선(`role="status"`, 어두운 배경·흰 글씨·위쪽 삼각형 꼭지)으로 "이번 달 영수증 인식 한도를 모두 썼습니다. 직접 입력을 이용해 주세요" 를 띄우고, 다시 누르거나 다른 곳을 누르면 닫는다. 한도 읽기에 실패하면 버튼을 막지 않는다. 인식 중 429 `ocr_quota_exceeded` 를 받으면 같은 문구를 기존 안내 자리에 띄우고 빈 폼으로 넘어간다.
-4. **내역 `/payments`**: 상단 월 이동(◀ 2026년 9월 ▶, 기본 이번 달), 카드 필터(전체/각 카드), 월 합계(취소 제외). 목록은 결제 일시 내림차순. 항목 클릭 → 상세 시트: 모든 필드 읽기 전용, 메모만 편집·저장, "취소" 버튼(확인창: "이 결제를 취소하면 되돌릴 수 없습니다"). 취소된 항목은 취소선 + "취소됨". 월 경계는 KST(+09:00 고정) 기준으로 계산해 `paid_at gte/lt`로 조회.
+3. **결제 추가 `/add`**: 상단에 "영수증 입력"(`<input type="file" accept="image/*">`)과 "직접 입력" 두 버튼. 사진을 고르면 canvas로 긴 변 1600px, JPEG 0.85로 줄여 base64로 `ocr` 함수 호출, "영수증을 읽는 중…" 표시. 결과로 폼을 채우고 OCR이 읽은 카드번호를 읽기 전용으로 표시. 카드 자동 선택: 읽은 번호에서 공백·하이픈을 걷어낸 뒤 첫 마스킹 문자 앞까지의 연속된 숫자를 뽑아 카드의 `card_prefix`와 앞에서부터 비교한다. 비교 길이는 둘 중 짧은 쪽이며 6자리 미만이면 선택하지 않는다. 정확히 한 장만 일치할 때만 선택. 폼: 카드(select, 필수), 가맹점(필수), 금액(필수, 양의 정수), 결제 일시(`datetime-local`, 기본 지금), 메모(선택). 응답의 `uncertain`에 든 필드의 입력은 호박색 테두리(`border-amber-500`)와 그 아래 작은 안내("확인해 주세요")로 표시하고, 사용자가 그 칸을 고치면 표시를 지운다(`cardNumber`는 카드 선택 칸에 표시). 저장 → insert(`source`는 사진을 고르면 `receipt`, 아니면 `manual`; OCR 실패 후 직접 입력해도 `manual`) → 새 결제의 id 를 받아, 고른 사진이 있으면 긴 변 1200px·JPEG 0.7(`src/lib/image.ts` 의 `resizeToDataUrl`)로 줄여 `receipt_images` 에 넣는다 → 홈으로. **사진 보관 실패는 결제 저장을 되돌리지 않는다** — 결제는 그대로 두고 "결제는 저장했지만 영수증 사진은 보관하지 못했습니다" 한 줄만 알린 뒤 홈으로 간다. OCR 실패(503/502/네트워크)는 "영수증을 읽지 못했습니다. 직접 입력해 주세요" 후 빈 폼. 화면에 들어올 때 `ocr_quota` 를 읽어 두 제공자가 모두 소진이면 "영수증 입력" 버튼을 비활성 모양으로 둔다(`disabled` 속성은 쓰지 않는다 — 비활성 버튼은 탭 이벤트가 오지 않아 안내를 띄울 수 없다. `aria-disabled="true"` + slate-300/slate-400 회색 + `cursor-not-allowed`, 파일 선택 창은 열지 않는다). 누르면 버튼 바로 아래에 말풍선(`role="status"`, 어두운 배경·흰 글씨·위쪽 삼각형 꼭지)으로 "이번 달 영수증 인식 한도를 모두 썼습니다. 직접 입력을 이용해 주세요" 를 띄우고, 다시 누르거나 다른 곳을 누르면 닫는다. 한도 읽기에 실패하면 버튼을 막지 않는다. 인식 중 429 `ocr_quota_exceeded` 를 받으면 같은 문구를 기존 안내 자리에 띄우고 빈 폼으로 넘어간다.
+4. **내역 `/payments`**: 상단 월 이동(◀ 2026년 9월 ▶, 기본 이번 달), 카드 필터(전체/각 카드), 월 합계(취소 제외). 목록은 결제 일시 내림차순. 항목 클릭 → 상세 시트: 모든 필드 읽기 전용, 메모만 편집·저장, "취소" 버튼(확인창: "이 결제를 취소하면 되돌릴 수 없습니다"). 시트를 열 때 그 결제의 영수증 사진(`receipt_images`)을 한 번 읽어, 있으면 메모 입력 위에 시트 폭에 맞춰 보여준다(`max-h-64 object-contain`, 둥근 모서리와 옅은 테두리, `alt="영수증 사진"`). 누르면 전체 화면으로 크게 본다(시트 z-20 위에 오도록 `fixed inset-0 z-30 bg-black/90` 오버레이 + `max-h-full max-w-full object-contain`, 아무 곳이나 누르면 닫히고 `aria-label="닫기"` 버튼도 하나 둔다). 사진이 없으면(직접 입력 등) 아무것도 그리지 않고 빈 자리도 만들지 않는다. 읽는 동안에도 아무것도 표시하지 않고, 읽기에 실패하면 조용히 넘어간다. 취소된 항목은 취소선 + "취소됨". 월 경계는 KST(+09:00 고정) 기준으로 계산해 `paid_at gte/lt`로 조회.
 5. **카드 `/cards`**: 카드 목록(이름, 카드번호 앞자리, 예산, 잔액). 목록 위에는 "카드 추가" 버튼 하나만 둔다. 카드 추가/수정 모달(이름, 예산, 카드번호 앞자리 선택): 예산 입력 아래에 "예산을 바꾸면 다음 달 1일부터 적용됩니다" 를 작은 글씨로 우측 정렬해 둔다. 앞자리 입력의 라벨은 "카드번호 앞 6~8자리(선택)"이고 그 아래에 "영수증은 뒤 4자리를 가리므로 앞자리로 맞춥니다" 한 줄을 둔다. 숫자 6~8자리가 아니면 저장하지 않는다. 카드 상세 시트: 이름·카드번호 앞자리·예산·잔액을 보여주고 예산 아래에 같은 안내 한 줄을 우측 정렬해 둔다. 버튼은 "수정"·"삭제" 둘뿐이다(`grid-cols-2`). **초기화 버튼은 카드별도 전체도 없다** — 잔액은 매월 1일 0시에 저절로 채워진다. 삭제는 확인창 후 실행하고 FK 오류면 안내.
 6. **설정 `/settings`**: PIN 변경(현재 PIN·새 PIN·새 PIN 확인 3개 입력. 현재 PIN 은 `signInWithPassword`로 확인한 뒤 `auth.updateUser`로 변경), 로그아웃, 앱 버전 표시.
 
@@ -176,8 +190,8 @@ PWA: manifest `name`/`short_name` "SW2HW 장부", `display: standalone`, `lang: 
 
 ## 9. 테스트 전략
 
-- **Vitest 단위**: `src/lib/money.test.ts`(원 표기), `src/lib/dates.test.ts`(KST 월 경계, datetime-local 변환), `src/lib/cards.test.ts`(앞자리 자동 선택), `supabase/functions/ocr/{clova-general,gemini,merge,quota}.test.ts`(실제 응답 픽스처 → 네 필드 + weak, Gemini 응답 정규화, 병합 규칙, 한도 판단), `src/lib/ocr.test.ts`(함수 응답 → 오류 코드).
-- **DB 스모크 `scripts/db-smoke.mjs`**: Management API `POST /v1/projects/{ref}/database/query`(PAT)로 한 트랜잭션 안에서 저장 잔액 규칙 전부를 검증한다 — 결제 삽입 시 `cards.balance` 차감 / 금액 수정 시도(실패 기대) / 취소 시 복구 / 취소 되돌리기 시도(실패 기대) / 지난달 날짜 결제는 잔액 불변 / `balance_month` 가 지난달인 카드에 결제를 넣으면 예산으로 넘어간 뒤 차감 / 예산 수정은 잔액 불변 / `roll_over_balances()` 넘김 / `purge_old_payments()` 3개월 규칙 / OCR 한도(한도까지 `ocr_quota_consume` 하면 `available` 이 false, `ocr_quota_exhaust` 는 즉시 false, 기간 문자열이 바뀌면 다시 true, 최상위 `available` 은 둘 중 하나라도 살아 있으면 true). 마지막에 `raise exception` 으로 강제 롤백하므로 실 데이터에 흔적을 남기지 않는다. (superuser라 RLS는 우회되므로 RLS 자체는 아래 QA가 확인. `auth.uid()` 를 요구하는 RPC 는 `set_config('request.jwt.claims', ...)` 로 트랜잭션 안에서만 sub 클레임을 심어 확인한다)
+- **Vitest 단위**: `src/lib/money.test.ts`(원 표기), `src/lib/dates.test.ts`(KST 월 경계, datetime-local 변환), `src/lib/cards.test.ts`(앞자리 자동 선택), `src/lib/image.test.ts`(축소 배율·data URL 접두어 제거), `supabase/functions/ocr/{clova-general,gemini,merge,quota}.test.ts`(실제 응답 픽스처 → 네 필드 + weak, Gemini 응답 정규화, 병합 규칙, 한도 판단), `src/lib/ocr.test.ts`(함수 응답 → 오류 코드).
+- **DB 스모크 `scripts/db-smoke.mjs`**: Management API `POST /v1/projects/{ref}/database/query`(PAT)로 한 트랜잭션 안에서 저장 잔액 규칙 전부를 검증한다 — 결제 삽입 시 `cards.balance` 차감 / 금액 수정 시도(실패 기대) / 취소 시 복구 / 취소 되돌리기 시도(실패 기대) / 지난달 날짜 결제는 잔액 불변 / `balance_month` 가 지난달인 카드에 결제를 넣으면 예산으로 넘어간 뒤 차감 / 예산 수정은 잔액 불변 / `roll_over_balances()` 넘김 / `purge_old_payments()` 3개월 규칙 / 영수증 사진(결제를 지우면 cascade 로 사진도 삭제, `data_url` 제약이 60만 자 초과와 `data:` 로 시작하지 않는 값을 거부, 오래된 결제를 정리하면 그 사진도 삭제) / OCR 한도(한도까지 `ocr_quota_consume` 하면 `available` 이 false, `ocr_quota_exhaust` 는 즉시 false, 기간 문자열이 바뀌면 다시 true, 최상위 `available` 은 둘 중 하나라도 살아 있으면 true). 마지막에 `raise exception` 으로 강제 롤백하므로 실 데이터에 흔적을 남기지 않는다. (superuser라 RLS는 우회되므로 RLS 자체는 아래 QA가 확인. `auth.uid()` 를 요구하는 RPC 는 `set_config('request.jwt.claims', ...)` 로 트랜잭션 안에서만 sub 클레임을 심어 확인한다)
 - **QA 시나리오(수동, 브라우저)**: 11절 체크리스트 전 항목. QA는 가능하면 로컬 Supabase(`supabase start`, Docker)에서 수행하고, 불가하면 클라우드에서 수행한 뒤 만든 테스트 데이터를 정리한다. RLS 확인: anon 키로 로그인 없이 select → 0건, 로그인 후 delete 시도 → 0건 삭제.
 - **빌드 게이트**: `npm run typecheck`, `npm test`, `npm run build`, `docker build` 모두 성공.
 
@@ -187,11 +201,11 @@ PWA: manifest `name`/`short_name` "SW2HW 장부", `display: standalone`, `lang: 
 .github/workflows/deploy.yml
 src/
   main.tsx, App.tsx(라우터·세션 가드·오프라인 배너)
-  lib/supabase.ts, lib/money.ts, lib/dates.ts, lib/ocr.ts(압축·함수 호출), lib/db.ts(쿼리 함수)
+  lib/supabase.ts, lib/money.ts, lib/dates.ts, lib/ocr.ts(함수 호출), lib/image.ts(canvas 축소 공용), lib/db.ts(쿼리 함수)
   pages/Login.tsx, Home.tsx, AddPayment.tsx, Payments.tsx, Cards.tsx, Settings.tsx
   components/(공통 소품 최소)
 public/icons/
-supabase/config.toml, migrations/{0001_init,0002_reset_at,0003_card_prefix,0004_stored_balance,0005_ocr_quota}.sql
+supabase/config.toml, migrations/{0001_init,0002_reset_at,0003_card_prefix,0004_stored_balance,0005_ocr_quota,0006_receipt_images}.sql
           functions/ocr/{index.ts,clova-general.ts,gemini.ts,merge.ts,quota.ts,*.fixtures.ts,*.test.ts}
 scripts/{seed-owner,disable-signup,set-secrets,db-smoke}.mjs
 Dockerfile, nginx.conf, docker-compose.yml, README.md
@@ -213,6 +227,10 @@ docs/adr/, docs/superpowers/specs/, docs/scrum/, docs/qa/
 - [ ] 인식 도중 429 `ocr_quota_exceeded` 를 받으면 같은 한도 문구를 안내 자리에 띄우고 직접 입력 폼으로 넘어감. "직접 입력" 버튼은 한도와 무관하게 그대로 동작
 - [ ] 내역: 월 이동, 카드 필터, 월 합계(취소 제외), 정렬 최신순
 - [ ] 결제 상세: 메모만 수정 가능, 다른 필드 편집 불가
+- [ ] 영수증으로 넣은 결제의 상세 시트에 사진이 보이고, 누르면 전체 화면으로 커지며 아무 곳이나 누르거나 닫기 버튼으로 닫힌다
+- [ ] 직접 입력으로 만든 결제의 상세 시트에는 사진 자리가 아예 없다
+- [ ] 사진 보관에 실패해도 결제는 저장된 채 홈으로 가고 안내 한 줄이 뜬다
+- [ ] 결제를 지우면(3개월 정리) 그 영수증 사진도 함께 사라진다(스모크 스크립트로 검증)
 - [ ] 결제 취소: 확인창, 취소 후 잔액에 다시 더해짐, 취소선 표시, 되돌리기 불가
 - [ ] 카드 화면에 초기화 버튼이 없다(카드별도, "모든 카드 초기화" 도). 상세 시트 버튼은 수정·삭제 둘뿐
 - [ ] 지난달 날짜로 결제를 추가하면 내역에만 들어가고 이번 달 잔액은 그대로

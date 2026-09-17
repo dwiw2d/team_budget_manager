@@ -3,7 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { btnPrimary, btnSecondary, h1, input, label } from "../components/ui";
 import { autoCardId } from "../lib/cards";
 import { fromDatetimeLocal, toDatetimeLocal } from "../lib/dates";
-import { getOcrQuota, insertPayment, listCardBalances } from "../lib/db";
+import { getOcrQuota, insertPayment, insertReceiptImage, listCardBalances } from "../lib/db";
+import { resizeToDataUrl, STORAGE_MAX_EDGE, STORAGE_QUALITY } from "../lib/image";
 import { OcrError, recognizeReceipt } from "../lib/ocr";
 import type { CardBalance, PaymentSource } from "../lib/types";
 
@@ -47,6 +48,17 @@ const blank = (): Form => ({
   source: "manual",
 });
 
+/** 사진 보관은 결제의 덤이다. 실패해도 이미 저장된 결제를 되돌리지 않고 안내 한 줄만 남긴다. */
+async function saveReceiptPhoto(paymentId: string, file: File) {
+  try {
+    const { dataUrl, width, height } = await resizeToDataUrl(file, STORAGE_MAX_EDGE, STORAGE_QUALITY);
+    await insertReceiptImage(paymentId, dataUrl, width, height);
+  } catch {
+    // 곧바로 홈으로 넘어가므로 화면 안내로는 보이지 않는다.
+    window.alert("결제는 저장했지만 영수증 사진은 보관하지 못했습니다");
+  }
+}
+
 export default function AddPayment() {
   const navigate = useNavigate();
   const [cards, setCards] = useState<CardBalance[]>([]);
@@ -61,7 +73,7 @@ export default function AddPayment() {
   // 두 제공자의 무료 한도가 모두 떨어졌는가. 한도를 못 읽었으면 false 로 두어 버튼을 막지 않는다.
   const [quotaGone, setQuotaGone] = useState(false);
   const [tip, setTip] = useState(false);
-  // 스펙 결정 6: 사진 File 은 저장 완료까지 보관한다(나중에 업로드 단계를 끼울 자리).
+  // 사진 File 은 저장이 끝날 때까지 들고 있다가 결제 id 를 받은 뒤 receipt_images 에 넣는다.
   const photoRef = useRef<File | null>(null);
 
   useEffect(() => {
@@ -141,7 +153,7 @@ export default function AddPayment() {
     setBusy(true);
     setError("");
     try {
-      await insertPayment({
+      const id = await insertPayment({
         card_id: form.cardId,
         merchant: form.merchant.trim(),
         amount,
@@ -150,7 +162,8 @@ export default function AddPayment() {
         ocr_card_number: form.ocrCardNumber,
         source: form.source,
       });
-      photoRef.current = null; // 사진은 보관하지 않는다
+      if (photoRef.current) await saveReceiptPhoto(id, photoRef.current);
+      photoRef.current = null;
       navigate("/");
     } catch (err) {
       setError((err as Error).message);

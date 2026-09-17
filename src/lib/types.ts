@@ -48,6 +48,15 @@ export interface NewPayment {
   source: PaymentSource;
 }
 
+/** 결제에 딸린 영수증 사진(표 receipt_images). 목록이 무거워지지 않게 결제 표와 나누어 두고 상세 시트에서만 읽는다. */
+export interface ReceiptImage {
+  payment_id: string;
+  /** "data:image/jpeg;base64,…" */
+  data_url: string;
+  width: number | null;
+  height: number | null;
+}
+
 export interface CardInput {
   name: string;
   initial_balance: number;

@@ -2,15 +2,38 @@ import { useCallback, useEffect, useState } from "react";
 import PaymentRow from "../components/PaymentRow";
 import { btnDanger, btnPrimary, btnText, h1, input, label } from "../components/ui";
 import { addMonths, formatKst, monthLabel, monthRange, todayKst } from "../lib/dates";
-import { cancelPayment, listCardBalances, listPaymentsByMonth, updatePaymentMemo } from "../lib/db";
+import {
+  cancelPayment,
+  getReceiptImage,
+  listCardBalances,
+  listPaymentsByMonth,
+  updatePaymentMemo,
+} from "../lib/db";
 import { formatWon } from "../lib/money";
-import type { CardBalance, PaymentWithCard } from "../lib/types";
+import type { CardBalance, PaymentWithCard, ReceiptImage } from "../lib/types";
 
 function Row({ k, v }: { k: string; v: string }) {
   return (
     <div className="flex justify-between gap-3">
       <dt className="text-slate-500">{k}</dt>
       <dd className="text-right text-slate-900">{v}</dd>
+    </div>
+  );
+}
+
+/** 영수증 사진 전체 화면 보기. 시트(z-20)보다 위에 깔고 아무 곳이나 누르면 닫는다. */
+function Zoom({ src, onClose }: { src: string; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/90" onClick={onClose}>
+      <img src={src} alt="영수증 사진" className="max-h-full max-w-full object-contain" />
+      <button
+        type="button"
+        className="absolute right-2 top-2 min-h-11 min-w-11 text-xl text-white"
+        onClick={onClose}
+        aria-label="닫기"
+      >
+        ✕
+      </button>
     </div>
   );
 }
@@ -28,7 +51,16 @@ function Sheet({
   const [memo, setMemo] = useState(p.memo ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // 사진은 시트를 열 때 한 번만 읽는다. 없거나(직접 입력) 읽기에 실패하면 아무것도 그리지 않는다.
+  const [photo, setPhoto] = useState<ReceiptImage | null>(null);
+  const [zoom, setZoom] = useState(false);
   const canceled = !!p.canceled_at;
+
+  useEffect(() => {
+    getReceiptImage(p.id)
+      .then(setPhoto)
+      .catch(() => {});
+  }, [p.id]);
 
   async function run(fn: () => Promise<void>) {
     setBusy(true);
@@ -69,6 +101,15 @@ function Sheet({
           {p.ocr_card_number && <Row k="영수증 카드번호" v={p.ocr_card_number} />}
           {p.canceled_at && <Row k="상태" v={`취소됨 (${formatKst(p.canceled_at)})`} />}
         </dl>
+        {photo && (
+          <button type="button" className="mb-4 block w-full" onClick={() => setZoom(true)}>
+            <img
+              src={photo.data_url}
+              alt="영수증 사진"
+              className="max-h-64 w-full rounded-lg border border-slate-200 object-contain"
+            />
+          </button>
+        )}
         <label className="block">
           <span className={label}>메모</span>
           <textarea
@@ -95,6 +136,7 @@ function Sheet({
             </button>
           )}
         </div>
+        {zoom && photo && <Zoom src={photo.data_url} onClose={() => setZoom(false)} />}
       </div>
     </div>
   );

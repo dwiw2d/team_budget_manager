@@ -8,6 +8,7 @@
 //   같은 이유로 auth.uid() 가 기본적으로 null 이라 owner_id 는 auth.users 의 기존 사용자(sb:seed-owner 로 만든 계정) id 를 쓴다.
 //   auth.uid() 를 요구하는 RPC(roll_over_balances, purge_old_payments)는 null 일 때 0 을 돌려주는지 먼저 본 다음,
 //   set_config('request.jwt.claims', ...) 으로 sub 클레임을 트랜잭션 안에서만 심어 실제 동작을 확인한다.
+// - (n)~(p) 는 영수증 사진 보관(receipt_images, 0006) 규칙이다.
 // - (j)~(m) 은 OCR 무료 한도(ocr_limits/ocr_usage, 0005) 규칙이다. 한도는 사용자별이 아니라 프로젝트 전체이므로
 //   시작 상태를 ocr_usage 를 비워 고정한 뒤 센다. 이 삭제도 같은 트랜잭션이라 롤백된다.
 process.loadEnvFile(".env.local");
@@ -31,6 +32,7 @@ declare
   card_a uuid;
   card_b uuid;
   pay_30k uuid;
+  pay_photo uuid;
   bal bigint;
   bmonth date;
   n integer;
@@ -181,6 +183,46 @@ begin
   results := results || jsonb_build_object('item', 'm', 'ok', ok,
     'detail', format('지난 기간 행만 남겼을 때 clova available=%s, gemini available=%s/used=%s, 최상위=%s (모두 true, used 0 기대)',
       quota->'clova'->>'available', quota->'gemini'->>'available', quota->'gemini'->>'used', quota->>'available'));
+
+  -- (n) 결제를 지우면 그 결제의 영수증 사진도 cascade 로 함께 사라진다.
+  insert into public.payments (owner_id, card_id, merchant, amount, paid_at, source)
+    values (owner_uuid, card_a, '스모크 사진 결제', 1000, now(), 'receipt') returning id into pay_photo;
+  insert into public.receipt_images (payment_id, owner_id, data_url, width, height)
+    values (pay_photo, owner_uuid, 'data:image/jpeg;base64,' || repeat('A', 200), 1200, 900);
+  delete from public.payments where id = pay_photo;
+  select count(*) into n from public.receipt_images where payment_id = pay_photo;
+  results := results || jsonb_build_object('item', 'n', 'ok', n = 0,
+    'detail', format('결제 삭제 후 남은 사진 건수=%s (기대 0, cascade)', n));
+
+  -- (o) data_url 제약: data: 로 시작하지 않거나 60만 자를 넘는 값은 거부한다.
+  insert into public.payments (owner_id, card_id, merchant, amount, paid_at, source)
+    values (owner_uuid, card_a, '스모크 제약 결제', 1000, now(), 'receipt') returning id into pay_photo;
+  begin
+    insert into public.receipt_images (payment_id, owner_id, data_url)
+      values (pay_photo, owner_uuid, repeat('A', 200));
+    ok := false; detail := 'data: 로 시작하지 않는 값이 들어갔다';
+  exception when others then
+    ok := true; detail := 'data: 아닌 값 거부';
+  end;
+  begin
+    insert into public.receipt_images (payment_id, owner_id, data_url)
+      values (pay_photo, owner_uuid, 'data:image/jpeg;base64,' || repeat('A', 600001));
+    ok := false; detail := detail || '; 60만 자를 넘는 값이 들어갔다';
+  exception when others then
+    detail := detail || '; 60만 자 초과 거부';
+  end;
+  results := results || jsonb_build_object('item', 'o', 'ok', ok, 'detail', detail);
+
+  -- (p) purge_old_payments() 로 지워진 오래된 결제의 사진도 함께 사라진다.
+  insert into public.payments (owner_id, card_id, merchant, amount, paid_at, source)
+    values (owner_uuid, card_a, '스모크 오래된 사진 결제', 1000, now() - interval '4 months', 'receipt')
+    returning id into pay_photo;
+  insert into public.receipt_images (payment_id, owner_id, data_url)
+    values (pay_photo, owner_uuid, 'data:image/jpeg;base64,' || repeat('A', 200));
+  select public.purge_old_payments() into n;
+  select count(*) into n from public.receipt_images where payment_id = pay_photo;
+  results := results || jsonb_build_object('item', 'p', 'ok', n = 0,
+    'detail', format('오래된 결제 정리 후 남은 사진 건수=%s (기대 0)', n));
 
   raise exception 'ROLLBACK_OK %', results::text;
 end
