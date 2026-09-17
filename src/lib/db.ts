@@ -1,12 +1,5 @@
 import { supabase } from "./supabase";
-import type {
-  CardBalance,
-  CardInput,
-  NewPayment,
-  OcrQuota,
-  PaymentWithCard,
-  ReceiptImage,
-} from "./types";
+import type { CardBalance, CardInput, NewPayment, OcrQuota, PaymentWithCard } from "./types";
 
 const PAYMENT_WITH_CARD = "*, cards(name)";
 
@@ -50,27 +43,32 @@ export async function insertPayment(p: NewPayment): Promise<string> {
   return (data as { id: string }).id;
 }
 
-export async function insertReceiptImage(
-  paymentId: string,
-  dataUrl: string,
-  width: number,
-  height: number,
-): Promise<void> {
-  const { error } = await supabase
-    .from("receipt_images")
-    .insert({ payment_id: paymentId, data_url: dataUrl, width, height });
+/** 영수증 사진의 저장소 경로. 규칙은 {owner_id}/{payment_id}.jpg 이고 정책이 첫 폴더로 소유자를 가린다. */
+async function receiptPath(paymentId: string): Promise<string> {
+  const { data } = await supabase.auth.getSession();
+  const userId = data.session?.user.id;
+  if (!userId) throw new Error("로그인이 필요합니다");
+  return `${userId}/${paymentId}.jpg`;
+}
+
+/** 결제를 저장해 id 를 받은 뒤에 부른다. 경로가 새 결제 id 라 upsert 가 실제로 덮을 일은 없다. */
+export async function uploadReceipt(paymentId: string, blob: Blob): Promise<void> {
+  const { error } = await supabase.storage
+    .from("receipts")
+    .upload(await receiptPath(paymentId), blob, { contentType: "image/jpeg", upsert: true });
   if (error) throw error;
 }
 
-/** 상세 시트를 열 때만 부른다. 사진이 없는 결제(직접 입력 등)면 null. */
-export async function getReceiptImage(paymentId: string): Promise<ReceiptImage | null> {
-  const { data, error } = await supabase
-    .from("receipt_images")
-    .select("payment_id, data_url, width, height")
-    .eq("payment_id", paymentId)
-    .maybeSingle();
-  if (error) throw error;
-  return data as ReceiptImage | null;
+/** 상세 시트를 열 때만 부른다. 사진이 없는 결제(직접 입력 등)면 null 이고 오류도 null 로 삼킨다. */
+export async function getReceiptUrl(paymentId: string): Promise<string | null> {
+  try {
+    const { data } = await supabase.storage
+      .from("receipts")
+      .createSignedUrl(await receiptPath(paymentId), 300);
+    return data?.signedUrl ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export async function updatePaymentMemo(id: string, memo: string | null): Promise<void> {

@@ -17,7 +17,8 @@
 - 지난달 날짜의 영수증을 늦게 넣으면 내역에만 들어가고 이번 달 잔액은 줄지 않습니다.
 - 영수증을 촬영하면 OCR로 가맹점·금액·일시·카드번호를 읽어 폼을 채우고, 앞자리가 일치하는 카드가 하나면 자동 선택합니다(영수증은 뒤 4자리를 가립니다). 확신하지 못한 칸은 호박색 테두리와 "확인해 주세요" 로 표시합니다. OCR에 실패하면 안내 후 직접 입력할 수 있습니다.
 - OCR 무료 한도는 CLOVA General OCR 월 100건, Gemini 하루 20건(한국 시간 기준)이며 `ocr_limits` 표의 `limit_count` 를 고쳐 바꿉니다(예: `update public.ocr_limits set limit_count = 200 where provider = 'clova';`). 둘 다 소진되면 "영수증 입력" 버튼이 회색으로 바뀌고 누르면 말풍선으로 안내하며, 직접 입력은 그대로 쓸 수 있습니다.
-- 영수증으로 넣은 결제는 사진도 함께 보관합니다. 긴 변 1200px·JPEG 품질 0.7 로 줄여(장당 약 200KB) 파일 저장소가 아니라 DB `receipt_images` 표에 담고, 결제 상세 시트를 열 때만 읽어 보여 줍니다(누르면 전체 화면). 사진은 그 결제가 지워질 때 함께 사라지므로 세 달 지난 결제 정리로 자동 삭제됩니다. 직접 입력한 결제에는 사진이 없습니다.
+- 영수증으로 넣은 결제는 사진도 함께 보관합니다. 긴 변 1200px·JPEG 품질 0.7 로 줄여(장당 약 200KB) Supabase 파일 저장소의 비공개 버킷 `receipts` 에 `{owner_id}/{payment_id}.jpg` 경로로 올리고, 결제 상세 시트를 열 때만 5분짜리 서명 URL 로 받아 보여 줍니다(누르면 전체 화면). 결제가 지워지면(세 달 지난 결제 정리 포함) 데이터베이스 트리거가 그 사진 파일도 함께 지웁니다 — 앱을 열지 않아도 정리됩니다. 다만 이 요청은 비동기(`pg_net`)라 실패해도 다시 시도하지 않습니다. 직접 입력한 결제에는 사진이 없습니다.
+- 무료 한도는 파일 저장소 1GB, 월 전송량 5GB 입니다(사진 장당 약 200KB 기준 약 5,000장). DB 는 500MB 로 결제 기록에만 씁니다.
 - 내역은 월 이동, 카드 필터, 월 합계(취소 제외)를 제공하고 최신순으로 정렬합니다.
 - 결제 상세에서는 메모만 수정할 수 있고 다른 필드는 바꿀 수 없습니다. 결제는 삭제할 수 없고 취소만 가능하며, 취소는 확인창을 거치고 되돌릴 수 없습니다. 취소된 결제는 잔액에서 빠지고 취소선으로 표시됩니다.
 - 설정에서 현재 PIN 을 확인한 뒤 PIN 을 바꾸면 새 PIN 으로만 로그인됩니다.
@@ -68,12 +69,13 @@ docker compose down
 ## 클라우드 배포 순서
 
 1. `npm run sb:link` — 클라우드 프로젝트 연결
-2. `npm run sb:push` — `supabase/migrations` 적용(`0001`~`0006`)
+2. `npm run sb:push` — `supabase/migrations` 적용(`0001`~`0008`)
 3. `npm run sb:functions` — Edge Function `ocr` 배포
 4. `npm run sb:disable-signup` — 공개 가입 차단
 5. `npm run sb:seed-owner` — 계정 1개 생성
-6. `npm run db:smoke` — DB 규칙 스모크 검증
-7. `git push origin HEAD:main` — GitHub Actions가 테스트·타입체크·빌드 후 GitHub Pages에 배포
+6. `npm run sb:db-secrets` — 사진 삭제 트리거가 쓸 값을 Vault 에 저장(`app_project_url`, `app_service_role_key`)
+7. `npm run db:smoke` — DB 규칙 스모크 검증
+8. `git push origin HEAD:main` — GitHub Actions가 테스트·타입체크·빌드 후 GitHub Pages에 배포
 
 GitHub 저장소 설정(이미 되어 있음): Pages 소스는 GitHub Actions, 저장소 variables에 `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` 등록(`gh variable set`). 하위 경로 새로고침은 `dist/404.html`(index.html 복사본)로 처리하므로 HTTP 상태는 404이지만 앱은 정상 로드됩니다.
 

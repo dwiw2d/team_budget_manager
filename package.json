@@ -15,6 +15,7 @@
     "sb:secrets": "node scripts/sb.mjs secrets",
     "sb:seed-owner": "node scripts/seed-owner.mjs",
     "sb:disable-signup": "node scripts/disable-signup.mjs",
+    "sb:db-secrets": "node scripts/set-db-secrets.mjs",
     "db:smoke": "node scripts/db-smoke.mjs"
   },
   "dependencies": {

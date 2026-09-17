@@ -30,21 +30,41 @@ function loadImage(file: File): Promise<HTMLImageElement> {
   });
 }
 
-/** canvas 로 긴 변 maxEdge, JPEG quality 로 줄여 data URL 로 만든다. */
-export async function resizeToDataUrl(
-  file: File,
-  maxEdge: number,
-  quality: number,
-): Promise<{ dataUrl: string; width: number; height: number }> {
+/** 긴 변을 maxEdge 에 맞춰 그린 canvas. 아래 두 함수가 형식만 달리해 내보낸다. */
+async function drawScaled(file: File, maxEdge: number): Promise<HTMLCanvasElement> {
   const img = await loadImage(file);
   const scale = scaleFor(img.naturalWidth, img.naturalHeight, maxEdge);
   const canvas = document.createElement("canvas");
   canvas.width = Math.round(img.naturalWidth * scale);
   canvas.height = Math.round(img.naturalHeight * scale);
   canvas.getContext("2d")!.drawImage(img, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+/** canvas 로 긴 변 maxEdge, JPEG quality 로 줄여 data URL 로 만든다. OCR 전송용. */
+export async function resizeToDataUrl(
+  file: File,
+  maxEdge: number,
+  quality: number,
+): Promise<{ dataUrl: string; width: number; height: number }> {
+  const canvas = await drawScaled(file, maxEdge);
   return {
     dataUrl: canvas.toDataURL("image/jpeg", quality),
     width: canvas.width,
     height: canvas.height,
   };
+}
+
+/** 같은 축소를 Blob 으로 낸다. 저장소 업로드용. canvas.toBlob 이 콜백이라 Promise 로 감싼다. */
+export async function resizeToBlob(
+  file: File,
+  maxEdge: number,
+  quality: number,
+): Promise<{ blob: Blob; width: number; height: number }> {
+  const canvas = await drawScaled(file, maxEdge);
+  const blob = await new Promise<Blob | null>((resolve) =>
+    canvas.toBlob(resolve, "image/jpeg", quality),
+  );
+  if (!blob) throw new Error("이미지를 변환할 수 없습니다");
+  return { blob, width: canvas.width, height: canvas.height };
 }

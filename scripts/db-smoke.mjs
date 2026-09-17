@@ -8,7 +8,9 @@
 //   같은 이유로 auth.uid() 가 기본적으로 null 이라 owner_id 는 auth.users 의 기존 사용자(sb:seed-owner 로 만든 계정) id 를 쓴다.
 //   auth.uid() 를 요구하는 RPC(roll_over_balances, purge_old_payments)는 null 일 때 0 을 돌려주는지 먼저 본 다음,
 //   set_config('request.jwt.claims', ...) 으로 sub 클레임을 트랜잭션 안에서만 심어 실제 동작을 확인한다.
-// - (n)~(p) 는 영수증 사진 보관(receipt_images, 0006) 규칙이다.
+// - (n) 은 영수증 사진 삭제(0008) 규칙이다. 저장소 파일 자체는 SQL 로 볼 수 없으므로, 결제를 지웠을 때
+//   트리거가 pg_net 큐에 삭제 요청을 남기는지로 확인한다. 큐 행도 이 트랜잭션에 속하므로 롤백되고,
+//   따라서 실제 저장소 요청은 끝내 나가지 않는다.
 // - (j)~(m) 은 OCR 무료 한도(ocr_limits/ocr_usage, 0005) 규칙이다. 한도는 사용자별이 아니라 프로젝트 전체이므로
 //   시작 상태를 ocr_usage 를 비워 고정한 뒤 센다. 이 삭제도 같은 트랜잭션이라 롤백된다.
 process.loadEnvFile(".env.local");
@@ -40,6 +42,7 @@ declare
   quota jsonb;
   ok boolean;
   detail text;
+  has_secrets boolean;
   period_start date := (date_trunc('month', now() at time zone 'Asia/Seoul'))::date;
   last_month date := (date_trunc('month', now() at time zone 'Asia/Seoul') - interval '1 month')::date;
   results jsonb := '[]'::jsonb;
@@ -184,45 +187,28 @@ begin
     'detail', format('지난 기간 행만 남겼을 때 clova available=%s, gemini available=%s/used=%s, 최상위=%s (모두 true, used 0 기대)',
       quota->'clova'->>'available', quota->'gemini'->>'available', quota->'gemini'->>'used', quota->>'available'));
 
-  -- (n) 결제를 지우면 그 결제의 영수증 사진도 cascade 로 함께 사라진다.
+  -- (n) 결제를 지우면 after delete 트리거가 그 사진의 저장소 삭제 요청을 pg_net 큐에 넣는다.
+  --     Vault 에 app_project_url·app_service_role_key 가 없으면 트리거는 조용히 지나간다.
+  --     어느 쪽이든 결제 삭제 자체는 성공해야 한다(비밀을 넣기 전에도 앱이 돌아야 한다).
+  select count(*) = 2 into has_secrets from vault.decrypted_secrets
+   where name in ('app_project_url', 'app_service_role_key');
   insert into public.payments (owner_id, card_id, merchant, amount, paid_at, source)
     values (owner_uuid, card_a, '스모크 사진 결제', 1000, now(), 'receipt') returning id into pay_photo;
-  insert into public.receipt_images (payment_id, owner_id, data_url, width, height)
-    values (pay_photo, owner_uuid, 'data:image/jpeg;base64,' || repeat('A', 200), 1200, 900);
   delete from public.payments where id = pay_photo;
-  select count(*) into n from public.receipt_images where payment_id = pay_photo;
-  results := results || jsonb_build_object('item', 'n', 'ok', n = 0,
-    'detail', format('결제 삭제 후 남은 사진 건수=%s (기대 0, cascade)', n));
-
-  -- (o) data_url 제약: data: 로 시작하지 않거나 60만 자를 넘는 값은 거부한다.
-  insert into public.payments (owner_id, card_id, merchant, amount, paid_at, source)
-    values (owner_uuid, card_a, '스모크 제약 결제', 1000, now(), 'receipt') returning id into pay_photo;
+  select count(*) into n from public.payments where id = pay_photo;
+  ok := (n = 0);
+  detail := format('Vault 비밀 설정=%s; 결제 삭제 후 남은 건수=%s (기대 0)', has_secrets, n);
+  -- 큐는 이 결제 경로로만 센다. 다른 트랜잭션의 요청을 워커가 가져가도 흔들리지 않는다.
   begin
-    insert into public.receipt_images (payment_id, owner_id, data_url)
-      values (pay_photo, owner_uuid, repeat('A', 200));
-    ok := false; detail := 'data: 로 시작하지 않는 값이 들어갔다';
+    select count(*) into n from net.http_request_queue
+     where url like '%/receipts/' || owner_uuid || '/' || pay_photo || '.jpg';
+    ok := ok and (n = (case when has_secrets then 1 else 0 end));
+    detail := detail || format('; 이 경로의 net 요청=%s건 (기대 %s)',
+      n, case when has_secrets then 1 else 0 end);
   exception when others then
-    ok := true; detail := 'data: 아닌 값 거부';
+    detail := detail || format('; net 큐를 읽지 못해 요청은 확인하지 못했다(%s)', sqlerrm);
   end;
-  begin
-    insert into public.receipt_images (payment_id, owner_id, data_url)
-      values (pay_photo, owner_uuid, 'data:image/jpeg;base64,' || repeat('A', 600001));
-    ok := false; detail := detail || '; 60만 자를 넘는 값이 들어갔다';
-  exception when others then
-    detail := detail || '; 60만 자 초과 거부';
-  end;
-  results := results || jsonb_build_object('item', 'o', 'ok', ok, 'detail', detail);
-
-  -- (p) purge_old_payments() 로 지워진 오래된 결제의 사진도 함께 사라진다.
-  insert into public.payments (owner_id, card_id, merchant, amount, paid_at, source)
-    values (owner_uuid, card_a, '스모크 오래된 사진 결제', 1000, now() - interval '4 months', 'receipt')
-    returning id into pay_photo;
-  insert into public.receipt_images (payment_id, owner_id, data_url)
-    values (pay_photo, owner_uuid, 'data:image/jpeg;base64,' || repeat('A', 200));
-  select public.purge_old_payments() into n;
-  select count(*) into n from public.receipt_images where payment_id = pay_photo;
-  results := results || jsonb_build_object('item', 'p', 'ok', n = 0,
-    'detail', format('오래된 결제 정리 후 남은 사진 건수=%s (기대 0)', n));
+  results := results || jsonb_build_object('item', 'n', 'ok', ok, 'detail', detail);
 
   raise exception 'ROLLBACK_OK %', results::text;
 end
