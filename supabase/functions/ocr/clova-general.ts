@@ -54,13 +54,13 @@ const KRW = /\d{1,3}(?:,\d{3})+|\d+/g;
 // 다수결만 하면 '사용자가 낸 돈'이 아니라 '총액'이 뽑힌다. 그 값을 저장하면 카드 잔액이 틀어진다.
 //
 // 2등급 — 사용자가 실제로 낸 돈을 가리키는 라벨.
-const AMOUNT_PAID = ['본인부담', '납부할금액', '수납금액', '받을금액', '받은금액', '결제금액', '결제요금', '결제액'];
+const AMOUNT_PAID = ['납부할금액', '수납금액', '받을금액', '받은금액', '결제금액', '결제요금', '결제액'];
 // 1등급 — 어느 쪽인지 알 수 없는 총계 낱말.
 const AMOUNT_SUM = ['합계', '카드매출', '총금액', '주문금액', '티켓정보', 'TOTAL'];
 // 0등급 — 사용자가 낸 돈이 아닌 금액. 후보에서 빼지는 않는다(이것밖에 없는 영수증이 있다 —
 // receipt-3 은 '판매금액' 으로만 21,000 을 적는다). '판매금액' 은 부가세를 뺀 공급가라
 // 두 번 나오면 다수결로 이기므로 여기 둔다.
-const AMOUNT_OTHER = ['총액', '공단부담', '보험자부담', '비급여', '급여', '판매금액'];
+const AMOUNT_OTHER = ['총액', '판매금액'];
 const AMOUNT_TIERS = [AMOUNT_OTHER, AMOUNT_SUM, AMOUNT_PAID];
 // 금액 줄에서 빼는 낱말. 위 세 등급을 먼저 보므로 "결제금액" 이 "금액" 때문에 빠지지 않는다.
 const AMOUNT_NO = ['부가세', '공급가', '단가', '금액', '과세물품', '면세', '봉사료', '거스름'];
@@ -185,6 +185,24 @@ export function linesFromFields(fields: OcrField[]): Line[] {
   });
 }
 
+/** 칸의 마지막 숫자를 금액으로 읽는다. 100 미만이면 금액이 아니라고 본다. */
+function money(text: string): number | null {
+  const n = lastNumber(text);
+  return n !== null && n >= 100 ? n : null;
+}
+
+// 금액을 자릿수 칸에 한 자씩 찍은 영수증("합계  4 4 0 0" = 4,400). 칸 전체가 한 자리 숫자만
+// 나란히 있을 때만 붙인다. 금액 라벨이 가리킨 칸에서만 부르므로 수량·개수 칸에는 닿지 않는다.
+const DIGIT_BOXES = /^\d(?: \d)+$/;
+
+/** 금액 라벨이 가리킨 칸의 값. 자릿수 칸이면 붙여 읽는다. */
+function cellAmount(text: string): number | null {
+  const direct = money(text);
+  if (direct !== null) return direct;
+  const boxed = text.trim();
+  return DIGIT_BOXES.test(boxed) ? money(boxed.replace(/ /g, '')) : null;
+}
+
 function lastNumber(text: string): number | null {
   const hits = text.match(KRW);
   if (!hits) return null;
@@ -192,8 +210,9 @@ function lastNumber(text: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+
 /**
- * 라벨 등급. 라벨이 없으면 -1. 여러 등급이 섞인 줄은 높은 쪽을 따른다.
+ * 라벨 등급. 라벨이 없으면 -1. 여러 등급이 섞이면 높은 쪽을 따른다.
  * 입력은 공백을 지운 뒤 대문자로 올린 글자다 — '결 제 액' 같은 자간 공백도,
  * 소문자 'Total' 도 같은 라벨로 읽힌다.
  */
@@ -204,15 +223,36 @@ function amountTier(squashed: string): number {
   return -1;
 }
 
+/**
+ * 한 줄에서 (라벨 등급, 금액) 짝을 뽑는다. 줄 통째로 마지막 숫자를 집으면 좌우 2단 줄에서
+ * 오른쪽 끝 다른 칸의 값("총 합 계 5,600   할 인 0" 의 0)을 라벨의 값으로 착각한다.
+ * 그래서 상호 작업에서 만든 토막 분리를 그대로 쓰고, 라벨이 든 칸부터 다음 라벨 칸 앞까지만 본다.
+ */
+function amountCells(line: Line): Array<{ tier: number; value: number }> {
+  const segs = segments(line);
+  // 등급이 NO 보다 세다 ("합계금액(부가세포함)")
+  const tiers = segs.map((seg) => amountTier(squash(seg).toUpperCase()));
+  const out: Array<{ tier: number; value: number }> = [];
+  segs.forEach((seg, i) => {
+    if (tiers[i] < 0) return;
+    // 100 미만은 금액으로 치지 않는다. '약제비총액(1+2+3)' 의 항목 번호, '합계 ①4,500 ②0 ③0'
+    // 의 빈 칸, '합계수량/금액 3 4,700' 의 수량이 전부 여기서 걸린다.
+    let n = cellAmount(seg);
+    // 라벨만 찍힌 칸이면 값은 오른쪽 칸에 있다. 다음 라벨 칸을 만나면 거기서 멈춘다.
+    for (let j = i + 1; n === null && j < segs.length && tiers[j] < 0; j += 1) n = cellAmount(segs[j]);
+    if (n !== null) out.push({ tier: tiers[i], value: n });
+  });
+  // 토막에서 아무것도 못 건지면 줄 통째로 본다. '-  합  계   11,400' 처럼 라벨 자체가
+  // 토막 경계에 걸려 쪼개지는 줄이 있어서, 토막 분리가 오히려 라벨을 지워 버린다.
+  if (out.length) return out;
+  const tier = amountTier(squash(line.text).toUpperCase());
+  const n = tier < 0 ? null : money(line.text);
+  return n === null ? [] : [{ tier, value: n }];
+}
+
 /** keyed=false 면 "합계" 같은 낱말 없이 "가장 큰 숫자" 규칙으로 고른 값이라 확신이 없다. */
 function findAmount(lines: Line[]): { value: number | null; keyed: boolean } {
-  const keyed: Array<{ tier: number; value: number }> = [];
-  for (const l of lines) {
-    const tier = amountTier(squash(l.text).toUpperCase()); // 등급이 NO 보다 세다 ("합계금액(부가세포함)")
-    if (tier < 0) continue;
-    const n = lastNumber(l.text);
-    if (n !== null && n > 0) keyed.push({ tier, value: n });
-  }
+  const keyed = lines.flatMap(amountCells);
   if (keyed.length) {
     // 가장 높은 등급만 남기고 그 안에서 다수결. 같은 표수면 큰 값 — 등급으로 이미 갈랐으므로
     // 여기 남은 것들은 같은 뜻의 금액이고, 큰 쪽이 부분합이 아닌 총계일 때가 많다.

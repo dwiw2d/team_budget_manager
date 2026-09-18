@@ -240,6 +240,36 @@ describe("금액 라벨 사전: 자간 공백·영문·주문/티켓 서식", ()
   });
 });
 
+describe("금액 좌우 2단: 라벨 칸과 그 오른쪽 칸까지만 본다", () => {
+  it("오른쪽 끝의 '할 인 0' 을 합계 값으로 집지 않는다", () => {
+    const fields = linesToFields(["총 합 계        5,600     할 인        0"]);
+    expect(extract(fields).amount).toBe(5600);
+  });
+
+  it("라벨 칸에 숫자가 없으면 오른쪽 칸에서 값을 가져온다", () => {
+    const fields = linesToFields(["총수납금액   현  금        8,000 원"]);
+    expect(extract(fields).amount).toBe(8000);
+  });
+
+  it("라벨이 토막 경계에 걸려 쪼개지면 줄 통째로 다시 본다", () => {
+    // '-  합  계   11,400' 은 토막이 '-' / '합' / '계' / '11,400' 로 갈린다.
+    expect(extract(linesToFields(["-  합  계        11,400"])).amount).toBe(11400);
+  });
+
+  it("항목 번호 '(1+2+3)' 을 금액으로 집지 않는다", () => {
+    const fields = linesToFields(["약제비총액(1+2+3)        26,990 원", "합  계        8,000 원"]);
+    expect(extract(fields).amount).toBe(8000);
+  });
+
+  it("자릿수 칸에 한 자씩 찍힌 금액을 붙여 읽는다", () => {
+    expect(extract(linesToFields(["합계        4 4 0 0"])).amount).toBe(4400);
+  });
+
+  it("금액 라벨이 없는 줄의 한 자리 숫자 나열은 건드리지 않는다", () => {
+    expect(extract(linesToFields(["주문수량        4 4 0 0", "아메리카노 4,500"])).amount).toBe(4500);
+  });
+});
+
 describe("금액 fallback: 라벨이 하나도 없을 때", () => {
   it("쉼표가 찍힌 숫자가 있으면 사업자번호·요금표 토막은 보지 않는다", () => {
     const fields = linesToFields(["106-81-23498 (주)롯데리아 월드몰 3층점", "T-REX세트   5,600"]);
