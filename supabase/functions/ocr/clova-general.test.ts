@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { extract, linesFromFields, merchantOk } from "./clova-general.ts";
+import { extract, linesFromFields, merchantFromLine, merchantOk } from "./clova-general.ts";
+// 벤치 채점기와 같은 합성 좌표 생성기. 넓은 공백(2칸 이상)을 좌우 단으로 벌려 준다.
+// tsconfig 가 allowJs 를 끄고 있어 .mjs 에는 타입이 없다. 벤치 쪽 파일이라 손대지 않는다.
+// @ts-expect-error -- 타입 선언 없는 .mjs
+import { linesToFields } from "../../../scripts/ocr-bench/lib/synth-fields.mjs";
 import { resolve } from "./merge.ts";
 import { receipt1Fields, receipt2Fields, receipt3Fields } from "./clova-general.fixtures.ts";
 
@@ -108,28 +112,54 @@ describe("상호 규칙 (c) 의 weak 가 화면의 '확인해 주세요' 까지 
 
 describe("상호 규칙 (c): 자리만 보고 고른 값", () => {
   // 사업자번호 줄 '바로 윗줄'이 늘 상호인 것은 아니다. 아래 셋은 실제로 파서를 속였다.
-  // 틀린 값을 확신해서 내보내면 2단계 Gemini 보완도, 화면의 "확인해 주세요" 표시도 함께 닫힌다.
+  // 윗줄이 역할어·주소면 버리고 위로 더 올라가거나 맨 위 줄에서 찾는다. 다만 자리만 보고
+  // 고른 값이므로 확신하지 않는다 — weak 에 merchant 가 남아야 2단계 Gemini 보완도,
+  // 화면의 "확인해 주세요" 표시도 열린다. 절대 하면 안 되는 것은 '확신하면서 틀리는' 것이다.
 
-  it("윗줄이 '대표 <이름>' 이면 상호로 고르지 않는다", () => {
-    const fields = [line("행복식당", 0), line("대표 홍길동", 40), line("123-45-67890", 80)];
-    expect(extract(fields).merchant).toBeNull();
+  it("윗줄이 '대표 <이름>' 이면 그 이름 대신 그 위의 상호를 고른다", () => {
+    const fields = linesToFields(["행복식당", "대표 홍길동", "123-45-67890"]);
+    expect(extract(fields).merchant).toBe("행복식당");
     expect(extract(fields).weak).toContain("merchant");
   });
 
-  it("윗줄이 시/도 이름 없이 시작하는 주소면 상호로 고르지 않는다", () => {
-    const fields = [line("스타벅스 서현점", 0), line("성남시 분당구 황새울로", 40), line("123-45-67890", 80)];
-    expect(extract(fields).merchant).toBeNull();
+  it("윗줄이 시/도 이름 없이 시작하는 주소면 그 주소 대신 그 위의 상호를 고른다", () => {
+    const fields = linesToFields(["스타벅스 서현점", "성남시 분당구 황새울로", "123-45-67890"]);
+    expect(extract(fields).merchant).toBe("스타벅스 서현점");
     expect(extract(fields).weak).toContain("merchant");
   });
 
   it("3-2-5 모양의 영수번호를 사업자번호로 착각해 그 윗줄을 상호로 고르지 않는다", () => {
-    const fields = [
-      line("담당 이영희", 0),
-      line("No 001-22-33444", 40),
-      line("행복식당", 80),
-      line("123-45-67890", 120),
-    ];
-    expect(extract(fields).merchant).toBeNull();
+    const fields = linesToFields(["담당 이영희", "No 001-22-33444", "행복식당", "123-45-67890"]);
+    expect(extract(fields).merchant).toBe("행복식당"); // 'No 001-22-33444' 도 '담당 이영희' 도 아니다
+    expect(extract(fields).weak).toContain("merchant");
+  });
+
+  it("영수번호 줄의 두 글자짜리 영문 말머리를 상호로 돌려주지 않는다", () => {
+    // "No 001-22-33444" 에서 번호를 지우면 'No' 만 남는다. 상호가 아니라 말머리다.
+    expect(merchantFromLine(asLine("No 001-22-33444"))).toBeNull();
+    expect(merchantOk("No")).toBe(false);
+  });
+});
+
+describe("상호 규칙 (c) 의 확신: 앵커 줄에 다른 것이 섞였는지로 가른다", () => {
+  // 라벨이 있다는 사실은 그 줄이 사업자번호 줄임을 말할 뿐, 윗줄이 상호임을 보장하지 않는다.
+  // 실제로 표 머리글·상호 칸이 더 붙은 줄 위에서 안내문·표어를 확신하며 집어 갔다.
+
+  it("라벨과 번호뿐인 깨끗한 줄이면 그 윗줄을 확신한다", () => {
+    const fields = linesToFields(["행복식당", "사업자등록번호 123-45-67890"]);
+    expect(extract(fields).merchant).toBe("행복식당");
+    expect(extract(fields).weak).not.toContain("merchant");
+  });
+
+  it("같은 줄에 상호 칸이 더 붙어 있으면 확신하지 않는다", () => {
+    const fields = linesToFields(["행복식당", "사업자등록번호 123-45-67890 상 호"]);
+    expect(extract(fields).merchant).toBe("행복식당");
+    expect(extract(fields).weak).toContain("merchant");
+  });
+
+  it("앵커 줄이 표 머리글이면 확신하지 않는다", () => {
+    // 배달앱 영수증에 실제로 있는 줄이다. 윗줄은 상호가 아니라 배달 플랫폼 법인명이었다.
+    const fields = linesToFields(["(주)우아한형제들 김범준", "사업자등록번호 가맹점 전화번호"]);
     expect(extract(fields).weak).toContain("merchant");
   });
 });
@@ -162,19 +192,19 @@ describe("merchantOk: 거름망이 멀쩡한 상호를 버리지 않는다", () 
 
 describe("weak", () => {
   it("합계·총액 같은 낱말 없이 가장 큰 숫자로 고른 금액은 확신하지 않는다", () => {
-    const noKeyword = [line("아메리카노 4,500", 0), line("케이크 7,000", 40)];
+    const noKeyword = linesToFields(["아메리카노 4,500", "케이크 7,000"]);
     expect(extract(noKeyword).amount).toBe(7000); // 최댓값 규칙으로 떨어진다
     expect(extract(noKeyword).weak).toContain("amount");
   });
 
   it("합계 줄에서 고른 금액은 확신한다", () => {
-    const keyed = [line("아메리카노 4,500", 0), line("합계: 4,500원", 40)];
+    const keyed = linesToFields(["아메리카노 4,500", "합계: 4,500원"]);
     expect(extract(keyed).amount).toBe(4500);
     expect(extract(keyed).weak).not.toContain("amount");
   });
 
   it("시각을 못 찾아 자정으로 채우면 확신하지 않는다", () => {
-    const dateOnly = [line("거래일시: 2026-09-04", 0)];
+    const dateOnly = linesToFields(["거래일시: 2026-09-04"]);
     expect(extract(dateOnly).paidAt).toBe("2026-09-04T00:00:00+09:00");
     expect(extract(dateOnly).weak).toContain("paidAt");
   });
@@ -203,22 +233,6 @@ describe("linesFromFields", () => {
   });
 });
 
-/** 한 줄짜리 가짜 조각. weak 규칙만 보려고 최소한으로 만든다. */
-function line(text: string, top: number) {
-  return {
-    inferText: text,
-    lineBreak: true,
-    boundingPoly: {
-      vertices: [
-        { x: 0, y: top },
-        { x: 400, y: top },
-        { x: 400, y: top + 30 },
-        { x: 0, y: top + 30 },
-      ],
-    },
-  };
-}
-
 describe("merchantOk: '…스시'·'…장군' 상호를 주소로 오인하지 않는다", () => {
   // ADDRESS_FULL 의 첫 토막이 '한글 2자 이상 + 시/군' 이라 '회전스시'·'이순신장군' 이 지명으로 읽혔다.
   const keep = [
@@ -238,5 +252,265 @@ describe("merchantOk: '…스시'·'…장군' 상호를 주소로 오인하지 
   // 둘째 토막이 구/군/읍/면 으로 안 끝나면 주소로 보지 않는다. '양평군 한우마을' 은 상호로 살아남는다.
   it("'군 + 일반 낱말' 은 주소로 보지 않는다", () => {
     expect(merchantOk("양평군 한우마을")).toBe(true);
+  });
+});
+
+/** 글자 줄 하나를 합성 좌표에 얹어 Line 으로. 벤치 채점기가 쓰는 것과 같은 생성기다. */
+function asLine(text: string) {
+  return linesFromFields(linesToFields([text]))[0];
+}
+
+describe("상호 토막 떼어내기: 줄에 로고·전화·번호가 붙어 있어도 상호만 뽑는다", () => {
+  // 전부 실제 영수증에서 가져온 줄이다. 번호는 같은 자릿수 가짜로 바꿨다.
+  // 줄을 통째로 상호 후보로 쓰던 시절에는 셋 다 길이·숫자 조건에 걸려 버려졌다.
+  const cases: Array<[string, string]> = [
+    ["emart   이마트 신촌점 (02)-116-1219", "이마트 신촌점"],
+    ["emart   이마트 충주점 (043)841-1234", "이마트 충주점"],
+    ["[V]외래 [ ]입원(( )퇴원( )중간) 진료비 계산서·영수증   중앙대학교병원", "중앙대학교병원"],
+    ["GS25성내동원점              024749333", "GS25성내동원점"],
+    ["emart everyday   이마트에브리데이 서초내곡점", "이마트에브리데이 서초내곡점"],
+    ["첫걸음산부인과의원              TID:***2506093", "첫걸음산부인과의원"],
+  ];
+  it.each(cases)("%s -> %s", (text, want) => expect(merchantFromLine(asLine(text))).toBe(want));
+
+  it("넓게 띄어 쓴 상호는 앞 토막만 집지 않고 줄 통째로 쓴다", () => {
+    expect(merchantFromLine(asLine("롯데쇼핑(주)                    잠실 점"))).toBe("롯데쇼핑(주) 잠실 점");
+  });
+
+  it("상호가 없는 줄에서는 억지로 토막을 고르지 않는다", () => {
+    expect(merchantFromLine(asLine("215-67-00093 대표자"))).toBeNull();
+    expect(merchantFromLine(asLine("[구매] 2025-12-25   18:42        POS:1509-0607"))).toBeNull();
+  });
+
+  it("사업자번호 줄 위가 로고+상호+전화번호 한 줄이어도 상호를 뽑는다", () => {
+    const fields = linesToFields(["emart   이마트 신촌점 (02)-116-1219", "215-67-00093 대표자"]);
+    expect(extract(fields).merchant).toBe("이마트 신촌점");
+  });
+});
+
+describe("라벨로 상호 뽑기: 콜론이 없어도, 자간 공백이 있어도 찾는다", () => {
+  // 전부 실제 영수증 줄이다. 번호는 같은 자릿수 가짜로 바꿨다.
+  const cases: Array<[string, string[], string]> = [
+    ["매장 라벨", ["매장: 유니클로", "TEL. 02-3453-5448"], "유니클로"],
+    ["영화관 라벨", ["영화관:   메가박스중앙(주) 코엑스점", "사업자No: 120-85-14877"], "메가박스중앙(주) 코엑스점"],
+    ["주문매장 라벨", ["주문매장: 호시타코야끼 대치점"], "호시타코야끼 대치점"],
+    ["점 명 라벨(자간 공백)", ["점 명 : PID 인천 구월로데오광장점", "사업자 : 771-07-00251"], "PID 인천 구월로데오광장점"],
+    ["가 맹 점 명(자간 공백)", ["가 맹 점 명: 보소다테점", "대 표 자 명: 멘마짱"], "보소다테점"],
+    ["콜론 없는 표 칸", ["사업장소재지", "상    호   열매약국", "성    명   [마스킹/직인]"], "열매약국"],
+    ["사업자번호와 같은 칸 줄", ["사업자등록번호   203-82-03581   상호   중앙대학교병원"], "중앙대학교병원"],
+    ["라벨과 값이 모두 자간 공백", ["사업자등록번호   371-76-00154", "상  호   윤 중 약 국", "성  명"], "윤 중 약 국"],
+    ["라벨과 값이 한 낱말로 붙음", ["상호:동대문마트", "121-19-53775"], "동대문마트"],
+  ];
+  it.each(cases)("%s", (_why, lines, want) => expect(extract(linesToFields(lines)).merchant).toBe(want));
+
+  it("값을 줄 끝까지 잡지 않고 다음 토막 앞까지만 자른다", () => {
+    const fields = linesToFields(["상호: 두리이비인후과                          대표자: 홍정주"]);
+    expect(extract(fields).merchant).toBe("두리이비인후과");
+  });
+
+  it("콜론을 선택으로 바꿨어도 VAN 안내 문구는 라벨로 읽지 않는다", () => {
+    // 이 줄 하나 때문에 예전에는 콜론을 필수로 두었다. 라벨은 낱말 통째로 같을 때만 인정한다.
+    const fields = linesToFields([
+      "가맹점명/주소가 실제와 다른경우 신고안내(포상금 10만원 지급)",
+      "여신금융협회",
+    ]);
+    expect(extract(fields).merchant).toBeNull();
+  });
+});
+
+describe("merchantOk: 인사말·안내 문구를 상호로 받지 않는다", () => {
+  // 앵커가 없어 맨 위 줄에서 찾는 (d) 경로가 이것들을 상호로 집어 갔다. 전부 weak 라 조용히
+  // 틀리지는 않지만, 그럴듯하게 틀린 값은 사용자가 그대로 저장한다.
+  const drop = [
+    "감사합니다", "또 오세요", "안녕히 가세요", "이용해 주셔서 감사합니다",
+    "고객님", "교환·환불 안내", "반품 및 교환 안내", "포인트 적립", "적립되었습니다",
+    "고객", "안내",
+  ];
+  // '감사'·'고객' 은 상호에도 쓰인다. 그 말뿐인 단독 문장일 때만 걸러야 한다.
+  const keep = ["감사식당", "감사떡볶이", "고객만족센터", "고객사랑치과", "또오시오분식"];
+
+  it.each(drop)("상호로 받지 않는다: %s", (v) => expect(merchantOk(v)).toBe(false));
+  it.each(keep)("상호로 받는다: %s", (v) => expect(merchantOk(v)).toBe(true));
+
+  it("맨 위 줄이 인사말이면 건너뛰고 그 아래 상호를 쓴다", () => {
+    const fields = linesToFields(["감사합니다", "또 오세요", "행복분식", "아메리카노 4,500"]);
+    expect(extract(fields).merchant).toBe("행복분식");
+  });
+});
+
+describe("merchantOk: 자간 공백을 붙여 보고 한 번 더 거른다", () => {
+  it("벌려 찍은 역할어·표 머리글을 상호로 받지 않는다", () => {
+    expect(merchantOk("대 표 자 명: 멘마짱")).toBe(false);
+    expect(merchantOk("상 품 명   단 가")).toBe(false);
+  });
+
+  it("벌려 찍은 진짜 상호는 그대로 받는다", () => {
+    expect(merchantOk("윤 중 약 국")).toBe(true);
+    expect(merchantOk("현 대 백 화 점")).toBe(true);
+  });
+});
+
+describe("상호 앵커 넓히기: 사업자번호가 같은 줄·먼 줄이거나 아예 없을 때", () => {
+  it("사업자번호가 상호와 같은 줄이면 그 번호가 든 칸의 왼쪽을 상호로 본다", () => {
+    const fields = linesToFields([
+      "대한민국 1등인 이마트",
+      "이마트 탄현점 128-85-48537 대표: 최병훈",
+      "고양시 일산구 덕이동 203-1 (031)927-1234",
+    ]);
+    expect(extract(fields).merchant).toBe("이마트 탄현점");
+  });
+
+  it("번호가 제 칸의 맨 앞이면 왼쪽이 비었으므로 상호로 삼지 않는다", () => {
+    // "손은주   669-56-00790  Tel:…" 의 대표자 이름을 상호로 집던 자리다.
+    const fields = linesToFields([
+      "첫걸음산부인과의원              TID:***2506093",
+      "손은주   669-56-00790  Tel:0220387375",
+    ]);
+    expect(extract(fields).merchant).toBe("첫걸음산부인과의원");
+  });
+
+  it("사업자번호 줄과 상호 사이에 로고·주소가 끼어 있으면 위로 더 올라간다", () => {
+    const fields = linesToFields([
+      "THE HYUNDAI",
+      "(주)현대백화점 압구정본점",
+      "강남구 압구정로 165",
+      "211-85-37633   대표이사: 정지영 외 1인",
+    ]);
+    expect(extract(fields).merchant).toBe("(주)현대백화점 압구정본점");
+    expect(extract(fields).weak).toContain("merchant"); // 자리만 보고 골랐다
+  });
+
+  it("세 줄보다 더 올라가지는 않는다", () => {
+    const fields = linesToFields([
+      "행복식당",
+      "안내문 한 줄",
+      "안내문 두 줄",
+      "안내문 세 줄",
+      "123-45-67890",
+    ]);
+    expect(extract(fields).merchant).not.toBe("행복식당");
+  });
+
+  it("번호 모양이 아니어도 '사업자등록번호' 라벨만으로 자리를 안다", () => {
+    const fields = linesToFields([
+      "CU (Again)",
+      "******* 최근영수증발행인쇄 *******",
+      "CU 개포스카이점",
+      "사업자등록번호:7436000775",
+    ]);
+    expect(extract(fields).merchant).toBe("CU 개포스카이점");
+  });
+
+  it("라벨도 사업자번호도 없으면 맨 위 몇 줄에서 찾되 확신하지 않는다", () => {
+    const fields = linesToFields([
+      "모바일 영수증",
+      "GS25성내동원점              024749333",
+      "이경희                      2752301295",
+    ]);
+    expect(extract(fields).merchant).toBe("GS25성내동원점");
+    expect(extract(fields).weak).toContain("merchant");
+  });
+});
+
+describe("merchantOk 문턱: 앞 단계를 다 고친 뒤에 푼 것들", () => {
+  it("라벨이 직접 가리킨 값은 숫자 세 자리 규칙을 면제한다", () => {
+    expect(merchantOk("서울법인115")).toBe(false); // 자리만 보고 고른 값이면 여전히 버린다
+    expect(merchantOk("서울법인115", true)).toBe(true);
+    expect(extract(linesToFields(["상  호 : 서울법인115"])).merchant).toBe("서울법인115");
+    expect(extract(linesToFields(["상호:153구포국수(선릉역점)"])).merchant).toBe("153구포국수(선릉역점)");
+  });
+
+  it("라벨이 가리켜도 글자가 두 자 미만이면 상호로 받지 않는다", () => {
+    expect(merchantOk("1234567", true)).toBe(false);
+    expect(merchantOk("101-86-76277", true)).toBe(false);
+  });
+
+  it("20자가 넘는 긴 상호를 버리지 않는다", () => {
+    expect(merchantOk("(유)아웃백스테이크하우스코리아 신대방점")).toBe(true);
+  });
+
+  it("배달앱 화면의 UI 버튼을 상호로 고르지 않는다", () => {
+    expect(merchantOk("가게보기")).toBe(false);
+    expect(merchantOk("지도보기")).toBe(false);
+    const fields = linesToFields([
+      "픽업을 완료했어요",
+      "이삭토스트                지도보기",
+      "영수증 받기   전화   가게보기",
+    ]);
+    expect(extract(fields).merchant).toBe("이삭토스트");
+  });
+
+  it("시/도 이름으로 시작해도 뒤에 행정 접미사나 공백이 없으면 주소가 아니다", () => {
+    expect(merchantOk("강원대학교병원")).toBe(true);
+    expect(merchantOk("제주도횟집")).toBe(true);
+    expect(merchantOk("경기김밥")).toBe(true);
+    // 진짜 주소는 그대로 걸린다
+    expect(merchantOk("서울 강동구 선호대로")).toBe(false);
+    expect(merchantOk("강원도 춘천시 백령로")).toBe(false);
+    expect(merchantOk("서울특별시 송파구 올림픽로")).toBe(false);
+  });
+
+  it("역할어 칸의 오른쪽 칸은 사람 이름이므로 상호로 고르지 않는다", () => {
+    const fields = linesToFields([
+      "뉴매장",
+      "57,000원",
+      "대표                            김유나",
+      "사업자등록번호   331-88-02462",
+    ]);
+    expect(extract(fields).merchant).toBe("뉴매장");
+  });
+
+  it("도장처럼 한 글자만 찍힌 칸은 상호에서 뺀다", () => {
+    const fields = linesToFields([
+      "현 대 백 화 점  무 역 센 터 점        송",
+      "158-86-00318                           송",
+    ]);
+    expect(extract(fields).merchant).toBe("현 대 백 화 점 무 역 센 터 점");
+  });
+
+  it("맨 위 줄이 영문 로고면 그 아래 한글 상호를 먼저 쓴다", () => {
+    const fields = linesToFields([
+      "PARIS BAGUETTE",
+      "주문(대기)번호 - 0127",
+      "여의도KBS 파리바게트",
+    ]);
+    expect(extract(fields).merchant).toBe("여의도KBS 파리바게트");
+  });
+});
+
+describe("merchantOk: 라벨이 가리킨 값은 인사말 거름망과 두 글자 규칙을 면제한다", () => {
+  // 이 둘은 앵커가 없어 자리로 추측하는 (d) 경로에서 쓰라고 만든 것이다. 라벨은 사람이
+  // "여기가 상호다" 라고 명시한 것이라 그 위에서 또 거르면 멀쩡한 상호를 버린다.
+  const labelledOnly = [
+    // '…세요'·'…니다' 가 든 상호
+    "또오세요분식", "어서오세요마트", "드세요분식", "오세요네과일", "행복하세요약국",
+    "맛있습니다식당", "감사합니다",
+    // 안내 낱말이 앞글자로 들어간 상호
+    "교환역국밥", "교환학생카페", "교환다리설렁탕", "환불없는집", "환불맛집",
+    "적립왕고기", "적립왕치킨", "적립의민족", "반품천국",
+    // 단독 문장으로는 안내문이지만 라벨이 가리키면 상호다
+    "감사", "고객", "고객님", "안내",
+    // 한글 없는 두 글자 브랜드
+    "CU", "KT", "SK", "No",
+  ];
+
+  it.each(labelledOnly)("라벨 없으면 버리고, 라벨이 가리키면 받는다: %s", (v) => {
+    expect(merchantOk(v)).toBe(false);
+    expect(merchantOk(v, true)).toBe(true);
+  });
+
+  it("두 글자 브랜드를 라벨과 함께 돌려준다 — 라벨 글자가 섞이지 않는다", () => {
+    expect(extract(linesToFields(["상호: CU", "합계 10,000원"])).merchant).toBe("CU");
+    expect(extract(linesToFields(["가맹점명: KT", "합계 10,000원"])).merchant).toBe("KT");
+  });
+
+  it("라벨이 가리킨 인사말꼴 상호를 돌려준다", () => {
+    expect(extract(linesToFields(["상호: 또오세요분식", "합계 10,000원"])).merchant).toBe("또오세요분식");
+    expect(extract(linesToFields(["상호: 적립왕치킨", "합계 10,000원"])).merchant).toBe("적립왕치킨");
+  });
+
+  it("라벨이 없으면 맨 위 줄의 안내문을 여전히 건너뛴다", () => {
+    const fields = linesToFields(["또 오세요", "포인트 적립", "행복분식", "아메리카노 4,500"]);
+    expect(extract(fields).merchant).toBe("행복분식");
   });
 });
