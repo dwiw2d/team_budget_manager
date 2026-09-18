@@ -281,6 +281,46 @@ describe("금액 fallback: 라벨이 하나도 없을 때", () => {
   });
 });
 
+describe("결제 일시: 날짜 표기·12시간제·여러 날짜", () => {
+  it.each([
+    ["2021년 4월 19일", "2021-04-19"],
+    ["2022년 07월 20일", "2022-07-20"],
+    ["거래일시 2022 12 30", "2022-12-30"],
+  ])("%s 를 날짜로 읽는다", (line, want) => {
+    expect(extract(linesToFields([line])).paidAt).toBe(`${want}T00:00:00+09:00`);
+  });
+
+  it("수량 표 칸을 공백 구분 날짜로 오인하지 않는다", () => {
+    expect(extract(linesToFields(["티셔츠 3 2 1"])).paidAt).toBe(null);
+  });
+
+  it.each([
+    ["시간: 오후 3:47", "15:47:00"],
+    ["시간: 오후 12:10", "12:10:00"],
+    ["시간: 오전 12:30", "00:30:00"],
+    ["시간: 오전 9:05", "09:05:00"],
+  ])("%s 를 24시간제로 바꾼다", (time, want) => {
+    expect(extract(linesToFields([`2025-09-21 ${time}`])).paidAt).toBe(`2025-09-21T${want}+09:00`);
+  });
+
+  it("날짜가 여럿이면 시각이 함께 찍힌 줄을 고른다", () => {
+    // 수납일·발행일·전표일시가 흩어진 진료비 영수증 판형이다.
+    const fields = linesToFields(["수납일 2022.06.23", "항목   급여", "2022년 07월 18일 17:18"]);
+    expect(extract(fields).paidAt).toBe("2022-07-18T17:18:00+09:00");
+  });
+
+  it("시각이 영수증에 딱 하나면 날짜와 멀어도 쓴다", () => {
+    const fields = linesToFields(["50912   2026-04-02(목)   POS-01", "칸쵸  1,500", "합계  1,500", "NO:1777  14:27"]);
+    expect(extract(fields).paidAt).toBe("2026-04-02T14:27:00+09:00");
+  });
+
+  it("멀리 있는 시각이 둘 이상이면 고르지 않고 자정으로 둔다", () => {
+    const fields = linesToFields(["2026-04-02(목)", "합계  1,500", "영업시간 09:00", "NO:1777  14:27"]);
+    expect(extract(fields).paidAt).toBe("2026-04-02T00:00:00+09:00");
+    expect(extract(fields).weak).toContain("paidAt");
+  });
+});
+
 describe("weak", () => {
   it("합계·총액 같은 낱말 없이 가장 큰 숫자로 고른 금액은 확신하지 않는다", () => {
     const noKeyword = linesToFields(["아메리카노 4,500", "케이크 7,000"]);

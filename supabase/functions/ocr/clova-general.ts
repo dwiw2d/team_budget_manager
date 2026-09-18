@@ -285,9 +285,13 @@ function findAmount(lines: Line[]): { value: number | null; keyed: boolean } {
 /** 줄에서 날짜만 찾아 YYYY-MM-DD 로. 시각은 따로 찾는다(다른 조각으로 쪼개져 나오기 때문). */
 function parseDate(text: string): string | null {
   const forms = [
+    /(?<!\d)(\d{4})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일/, // 2021년 4월 19일
     /(?<!\d)(\d{4})[-.\/](\d{1,2})[-.\/](\d{1,2})(?!\d)/, // 2026-09-15
     /(?<!\d)(\d{4})(\d{2})(\d{2})(?!\d)/, // 20260915
     /(?<!\d)(\d{2})[-.\/](\d{2})[-.\/](\d{2})(?!\d)/, // 26/09/04
+    // 구분 기호 없이 공백으로만 나눈 날짜("2022 12 30"). 연도를 19xx·20xx 로 못 박아
+    // "수량 12 30" 같은 표 칸을 날짜로 읽지 않게 한다. 위 형식이 다 빗나갔을 때만 쓴다.
+    /(?<!\d)((?:19|20)\d{2})\s+(\d{1,2})\s+(\d{1,2})(?!\d)/,
   ];
   for (const re of forms) {
     const m = text.match(re);
@@ -302,25 +306,48 @@ function parseDate(text: string): string | null {
 // "12:38:31" 도 "12:38: 27" 도 받는다. 뒤쪽은 "12:38:" 과 "27" 이 다른 조각으로 나뉜 경우다.
 const TIME = /(?<!\d)([01]?\d|2[0-3])\s*:\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?(?!\d)/;
 
+// 시각 앞에 붙는 12시간제 표시. "시간: 오후 3:47" 은 15:47 이다.
+const HALF_DAY = /(오전|오후)\s*$/;
+
 function parseTime(text: string | undefined): string | null {
   const m = text?.match(TIME);
-  return m ? `${pad(Number(m[1]))}:${m[2]}:${m[3] ?? '00'}` : null;
+  if (!m) return null;
+  let h = Number(m[1]);
+  const half = text!.slice(0, m.index).match(HALF_DAY)?.[1];
+  if (half === '오후' && h < 12) h += 12; // 오후 12시는 그대로 12시다
+  if (half === '오전' && h === 12) h = 0; // 오전 12시는 0시다
+  return `${pad(h)}:${m[2]}:${m[3] ?? '00'}`;
 }
 
 /** hasTime=false 면 시각을 못 찾아 00:00:00 으로 채운 것이라 확신이 없다. */
-function findPaidAt(lines: Line[]): { value: string | null; hasTime: boolean } {
-  const labelled: number[] = [];
-  const rest: number[] = [];
-  lines.forEach((l, i) => (DATE_LABELS.some((k) => squash(l.text).includes(k)) ? labelled : rest).push(i));
+/** 영수증 전체에 시각이 딱 하나면 그것, 아니면 null. */
+function onlyTime(lines: Line[]): string | null {
+  const times = [...new Set(lines.map((l) => parseTime(l.text)).filter(Boolean))];
+  return times.length === 1 ? times[0] : null;
+}
 
-  for (const i of [...labelled, ...rest]) {
-    const date = parseDate(lines[i].text);
-    if (!date) continue;
-    // 날짜를 찾은 줄에 시각이 없으면 이웃 줄까지 본다. 그래도 없을 때만 자정으로 둔다.
-    const time = parseTime(lines[i].text) ?? parseTime(lines[i + 1]?.text) ?? parseTime(lines[i - 1]?.text);
-    return { value: `${date}T${time ?? '00:00:00'}+09:00`, hasTime: time !== null };
-  }
-  return { value: null, hasTime: false };
+function findPaidAt(lines: Line[]): { value: string | null; hasTime: boolean } {
+  // 날짜가 든 줄을 모두 모아 순위를 매긴다. 시각이 붙은 날짜가 먼저다 —
+  // 한 영수증에 수납일·발행일·전표일시가 흩어져 있을 때, 결제 시각까지 함께 찍힌 줄이
+  // 실제 결제 시점이다. 그 다음이 '거래일시' 같은 라벨이 붙은 줄이다.
+  const found = lines
+    .map((l, i) => ({
+      i,
+      date: parseDate(l.text),
+      // 날짜를 찾은 줄에 시각이 없으면 이웃 줄까지 본다.
+      time: parseTime(l.text) ?? parseTime(lines[i + 1]?.text) ?? parseTime(lines[i - 1]?.text),
+      labelled: DATE_LABELS.some((k) => squash(l.text).includes(k)),
+    }))
+    .filter((c) => c.date);
+  if (!found.length) return { value: null, hasTime: false };
+
+  const rank = (c: (typeof found)[number]) => (c.time ? 0 : 2) + (c.labelled ? 0 : 1);
+  const best = found.reduce((a, b) => (rank(b) < rank(a) ? b : a));
+  // 이웃 줄에도 시각이 없으면 영수증 전체를 본다. 다만 시각이 딱 하나일 때만 쓴다 —
+  // 영수증 맨 아래 'NO:1777  14:27' 처럼 결제 시각이 날짜와 멀리 떨어진 판형이 있다.
+  // 시각이 여럿이면 어느 것이 결제 시각인지 알 수 없으므로 자정으로 둔다.
+  const time = best.time ?? onlyTime(lines);
+  return { value: `${best.date}T${time ?? '00:00:00'}+09:00`, hasTime: time !== null };
 }
 
 function findCardNumber(lines: Line[]): string | null {
