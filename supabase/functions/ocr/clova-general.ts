@@ -49,9 +49,20 @@ export interface Extracted {
 
 const KRW = /\d{1,3}(?:,\d{3})+|\d+/g;
 
-// 금액 줄로 인정하는 낱말 (공백 제거 후 비교)
-const AMOUNT_YES = ['합계', '총액', '받을금액', '결제금액', '판매금액', '카드매출', '총금액'];
-// 금액 줄에서 빼는 낱말. YES 를 먼저 보므로 "결제금액" 이 "금액" 때문에 빠지지 않는다.
+// 금액 줄로 인정하는 낱말 (공백 제거 후 비교). 세 등급으로 나눈다 — 등급이 높은 쪽만 쓴다.
+// 진료비·약제비 영수증은 한 표 안에 총액·공단부담·본인부담이 나란히 있어서, 등급 없이
+// 다수결만 하면 '사용자가 낸 돈'이 아니라 '총액'이 뽑힌다. 그 값을 저장하면 카드 잔액이 틀어진다.
+//
+// 2등급 — 사용자가 실제로 낸 돈을 가리키는 라벨.
+const AMOUNT_PAID = ['납부할금액', '수납금액', '받을금액', '받은금액', '결제금액', '결제요금', '결제액'];
+// 1등급 — 어느 쪽인지 알 수 없는 총계 낱말.
+const AMOUNT_SUM = ['합계', '카드매출', '총금액', '주문금액', '티켓정보', 'TOTAL'];
+// 0등급 — 사용자가 낸 돈이 아닌 금액. 후보에서 빼지는 않는다(이것밖에 없는 영수증이 있다 —
+// receipt-3 은 '판매금액' 으로만 21,000 을 적는다). '판매금액' 은 부가세를 뺀 공급가라
+// 두 번 나오면 다수결로 이기므로 여기 둔다.
+const AMOUNT_OTHER = ['총액', '판매금액'];
+const AMOUNT_TIERS = [AMOUNT_OTHER, AMOUNT_SUM, AMOUNT_PAID];
+// 금액 줄에서 빼는 낱말. 위 세 등급을 먼저 보므로 "결제금액" 이 "금액" 때문에 빠지지 않는다.
 const AMOUNT_NO = ['부가세', '공급가', '단가', '금액', '과세물품', '면세', '봉사료', '거스름'];
 
 const DATE_LABELS = ['거래일시', '승인일시', '판매시간', '거래일자', '승인일자', '결제일시'];
@@ -181,24 +192,85 @@ function lastNumber(text: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/** 칸의 마지막 숫자를 금액으로 읽는다. 100 미만이면 금액이 아니라고 본다. */
+function money(text: string): number | null {
+  const n = lastNumber(text);
+  return n !== null && n >= 100 ? n : null;
+}
+
+// 금액을 자릿수 칸에 한 자씩 찍은 영수증("합계  4 4 0 0" = 4,400). 칸 전체가 한 자리 숫자만
+// 나란히 있을 때만 붙인다. 금액 라벨이 가리킨 칸에서만 부르므로 수량·개수 칸에는 닿지 않는다.
+const DIGIT_BOXES = /^\d(?: \d)+$/;
+
+/** 금액 라벨이 가리킨 칸의 값. 자릿수 칸이면 붙여 읽는다. */
+function cellAmount(text: string): number | null {
+  const direct = money(text);
+  if (direct !== null) return direct;
+  const boxed = text.trim();
+  return DIGIT_BOXES.test(boxed) ? money(boxed.replace(/ /g, '')) : null;
+}
+
+/**
+ * 라벨 등급. 라벨이 없으면 -1. 여러 등급이 섞이면 높은 쪽을 따른다.
+ * 입력은 공백을 지운 뒤 대문자로 올린 글자다 — '결 제 액' 같은 자간 공백도,
+ * 소문자 'Total' 도 같은 라벨로 읽힌다.
+ */
+function amountTier(squashed: string): number {
+  for (let t = AMOUNT_TIERS.length - 1; t >= 0; t -= 1) {
+    if (AMOUNT_TIERS[t].some((k) => squashed.includes(k))) {
+      // '합계수량/금액  3  4,700' 처럼 수량 칸을 낀 라벨은 품목 소계다. 할인을 빼기 전 값이라
+      // 사용자가 낸 돈이 아니다. 후보에서 빼지는 않고 0등급으로 내린다.
+      return squashed.includes('수량') ? 0 : t;
+    }
+  }
+  return -1;
+}
+
+/**
+ * 한 줄에서 (라벨 등급, 금액) 짝을 뽑는다. 줄 통째로 마지막 숫자를 집으면 좌우 2단 줄에서
+ * 오른쪽 끝 다른 칸의 값("총 합 계 5,600   할 인 0" 의 0)을 라벨의 값으로 착각한다.
+ * 그래서 상호 작업에서 만든 토막 분리를 그대로 쓰고, 라벨이 든 칸부터 다음 라벨 칸 앞까지만 본다.
+ */
+function amountCells(line: Line): Array<{ tier: number; value: number }> {
+  const segs = segments(line);
+  // 등급이 NO 보다 세다 ("합계금액(부가세포함)")
+  const tiers = segs.map((seg) => amountTier(squash(seg).toUpperCase()));
+  const out: Array<{ tier: number; value: number }> = [];
+  segs.forEach((seg, i) => {
+    if (tiers[i] < 0) return;
+    // 100 미만은 금액으로 치지 않는다. '약제비총액(1+2+3)' 의 항목 번호, '합계 ①4,500 ②0 ③0'
+    // 의 빈 칸, '합계수량/금액 3 4,700' 의 수량이 전부 여기서 걸린다.
+    let n = cellAmount(seg);
+    // 라벨만 찍힌 칸이면 값은 오른쪽 칸에 있다. 다음 라벨 칸을 만나면 거기서 멈춘다.
+    for (let j = i + 1; n === null && j < segs.length && tiers[j] < 0; j += 1) n = cellAmount(segs[j]);
+    if (n !== null) out.push({ tier: tiers[i], value: n });
+  });
+  // 토막에서 아무것도 못 건지면 줄 통째로 본다. '-  합  계   11,400' 처럼 라벨 자체가
+  // 토막 경계에 걸려 쪼개지는 줄이 있어서, 토막 분리가 오히려 라벨을 지워 버린다.
+  if (out.length) return out;
+  const tier = amountTier(squash(line.text).toUpperCase());
+  const n = tier < 0 ? null : money(line.text);
+  return n === null ? [] : [{ tier, value: n }];
+}
+
 /** keyed=false 면 "합계" 같은 낱말 없이 "가장 큰 숫자" 규칙으로 고른 값이라 확신이 없다. */
 function findAmount(lines: Line[]): { value: number | null; keyed: boolean } {
-  const keyed: number[] = [];
-  for (const l of lines) {
-    const s = squash(l.text);
-    if (!AMOUNT_YES.some((k) => s.includes(k))) continue; // YES 가 NO 보다 세다 ("합계금액(부가세포함)")
-    const n = lastNumber(l.text);
-    if (n !== null && n > 0) keyed.push(n);
-  }
+  const keyed = lines.flatMap(amountCells);
   if (keyed.length) {
-    // 같은 값이 여러 번이면 그 값, 아니면 가장 많이 나온 값.
+    // 가장 높은 등급만 남기고 그 안에서 다수결. 같은 표수면 큰 값 — 등급으로 이미 갈랐으므로
+    // 여기 남은 것들은 같은 뜻의 금액이고, 큰 쪽이 부분합이 아닌 총계일 때가 많다.
+    const top = Math.max(...keyed.map((k) => k.tier));
     const tally = new Map<number, number>();
-    for (const n of keyed) tally.set(n, (tally.get(n) ?? 0) + 1);
+    for (const k of keyed) if (k.tier === top) tally.set(k.value, (tally.get(k.value) ?? 0) + 1);
     return { value: [...tally].sort((a, b) => b[1] - a[1] || b[0] - a[0])[0][0], keyed: true };
   }
 
   // 키워드 줄이 없을 때: 날짜/전화/사업자/승인/카드번호처럼 보이는 줄을 걸러내고 남은 금액 중 최댓값.
-  let best: number | null = null;
+  // 천 단위 쉼표가 찍힌 숫자가 하나라도 있으면 그것만 본다. 영수증의 금액은 쉼표를 달고
+  // 나오지만 사업자번호·전화번호·연도·수량·요금표는 달지 않는다. 최댓값을 고르기 전에
+  // 금액이 될 수 없는 것을 이 한 가지로 걸러 낸다.
+  const loose: number[] = [];
+  const comma: number[] = [];
   for (const l of lines) {
     const s = squash(l.text);
     if (AMOUNT_NO.some((k) => s.includes(k))) continue;
@@ -206,18 +278,23 @@ function findAmount(lines: Line[]): { value: number | null; keyed: boolean } {
     for (const raw of l.text.match(KRW) ?? []) {
       if (!raw.includes(',') && raw.length > 6) continue; // 승인번호·영수번호 같은 긴 맨숫자
       const n = Number(raw.replace(/,/g, ''));
-      if (n >= 100 && (best === null || n > best)) best = n;
+      if (n >= 100) (raw.includes(',') ? comma : loose).push(n);
     }
   }
-  return { value: best, keyed: false };
+  const pool = comma.length ? comma : loose;
+  return { value: pool.length ? Math.max(...pool) : null, keyed: false };
 }
 
 /** 줄에서 날짜만 찾아 YYYY-MM-DD 로. 시각은 따로 찾는다(다른 조각으로 쪼개져 나오기 때문). */
 function parseDate(text: string): string | null {
   const forms = [
+    /(?<!\d)(\d{4})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일/, // 2021년 4월 19일
     /(?<!\d)(\d{4})[-.\/](\d{1,2})[-.\/](\d{1,2})(?!\d)/, // 2026-09-15
     /(?<!\d)(\d{4})(\d{2})(\d{2})(?!\d)/, // 20260915
     /(?<!\d)(\d{2})[-.\/](\d{2})[-.\/](\d{2})(?!\d)/, // 26/09/04
+    // 구분 기호 없이 공백으로만 나눈 날짜("2022 12 30"). 연도를 19xx·20xx 로 못 박아
+    // "수량 12 30" 같은 표 칸을 날짜로 읽지 않게 한다. 위 형식이 다 빗나갔을 때만 쓴다.
+    /(?<!\d)((?:19|20)\d{2})\s+(\d{1,2})\s+(\d{1,2})(?!\d)/,
   ];
   for (const re of forms) {
     const m = text.match(re);
@@ -232,41 +309,81 @@ function parseDate(text: string): string | null {
 // "12:38:31" 도 "12:38: 27" 도 받는다. 뒤쪽은 "12:38:" 과 "27" 이 다른 조각으로 나뉜 경우다.
 const TIME = /(?<!\d)([01]?\d|2[0-3])\s*:\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?(?!\d)/;
 
+// 시각 앞에 붙는 12시간제 표시. "시간: 오후 3:47" 은 15:47 이다.
+const HALF_DAY = /(오전|오후)\s*$/;
+
 function parseTime(text: string | undefined): string | null {
   const m = text?.match(TIME);
-  return m ? `${pad(Number(m[1]))}:${m[2]}:${m[3] ?? '00'}` : null;
+  if (!m) return null;
+  let h = Number(m[1]);
+  const half = text!.slice(0, m.index).match(HALF_DAY)?.[1];
+  if (half === '오후' && h < 12) h += 12; // 오후 12시는 그대로 12시다
+  if (half === '오전' && h === 12) h = 0; // 오전 12시는 0시다
+  return `${pad(h)}:${m[2]}:${m[3] ?? '00'}`;
 }
 
 /** hasTime=false 면 시각을 못 찾아 00:00:00 으로 채운 것이라 확신이 없다. */
-function findPaidAt(lines: Line[]): { value: string | null; hasTime: boolean } {
-  const labelled: number[] = [];
-  const rest: number[] = [];
-  lines.forEach((l, i) => (DATE_LABELS.some((k) => squash(l.text).includes(k)) ? labelled : rest).push(i));
+/** 영수증 전체에 시각이 딱 하나면 그것, 아니면 null. */
+function onlyTime(lines: Line[]): string | null {
+  const times = [...new Set(lines.map((l) => parseTime(l.text)).filter(Boolean))];
+  return times.length === 1 ? times[0] : null;
+}
 
-  for (const i of [...labelled, ...rest]) {
-    const date = parseDate(lines[i].text);
-    if (!date) continue;
-    // 날짜를 찾은 줄에 시각이 없으면 이웃 줄까지 본다. 그래도 없을 때만 자정으로 둔다.
-    const time = parseTime(lines[i].text) ?? parseTime(lines[i + 1]?.text) ?? parseTime(lines[i - 1]?.text);
-    return { value: `${date}T${time ?? '00:00:00'}+09:00`, hasTime: time !== null };
-  }
-  return { value: null, hasTime: false };
+function findPaidAt(lines: Line[]): { value: string | null; hasTime: boolean } {
+  // 날짜가 든 줄을 모두 모아 순위를 매긴다. 시각이 붙은 날짜가 먼저다 —
+  // 한 영수증에 수납일·발행일·전표일시가 흩어져 있을 때, 결제 시각까지 함께 찍힌 줄이
+  // 실제 결제 시점이다. 그 다음이 '거래일시' 같은 라벨이 붙은 줄이다.
+  const found = lines
+    .map((l, i) => ({
+      i,
+      date: parseDate(l.text),
+      // 날짜를 찾은 줄에 시각이 없으면 이웃 줄까지 본다.
+      time: parseTime(l.text) ?? parseTime(lines[i + 1]?.text) ?? parseTime(lines[i - 1]?.text),
+      labelled: DATE_LABELS.some((k) => squash(l.text).includes(k)),
+    }))
+    .filter((c) => c.date);
+  if (!found.length) return { value: null, hasTime: false };
+
+  const rank = (c: (typeof found)[number]) => (c.time ? 0 : 2) + (c.labelled ? 0 : 1);
+  const best = found.reduce((a, b) => (rank(b) < rank(a) ? b : a));
+  // 이웃 줄에도 시각이 없으면 영수증 전체를 본다. 다만 시각이 딱 하나일 때만 쓴다 —
+  // 영수증 맨 아래 'NO:1777  14:27' 처럼 결제 시각이 날짜와 멀리 떨어진 판형이 있다.
+  // 시각이 여럿이면 어느 것이 결제 시각인지 알 수 없으므로 자정으로 둔다.
+  const time = best.time ?? onlyTime(lines);
+  return { value: `${best.date}T${time ?? '00:00:00'}+09:00`, hasTime: time !== null };
+}
+
+// 한 영수증에 카드번호가 둘 있을 때 어느 쪽이 결제 카드인지 가르는 말머리.
+// 결제한 카드는 '신용카드 매출전표' 아래에 찍히고, 제휴할인 카드나 포인트 적립 카드는
+// 제 블록 안에 따로 찍힌다. 후자는 그 카드로 돈을 낸 것이 아니다.
+const CARD_SLIP = /신용카드|체크카드|직불카드/;
+const CARD_NOT_PAYMENT = /제휴|포인트|적립|멤버십/;
+
+/** 카드번호 앞 두 줄까지 보고 결제 전표 쪽이면 +1, 제휴·적립 블록 쪽이면 -1. */
+function cardContext(lines: Line[], i: number): number {
+  const near = lines.slice(Math.max(0, i - 2), i + 1).map((l) => l.text).join(' ');
+  return (CARD_SLIP.test(near) ? 1 : 0) - (CARD_NOT_PAYMENT.test(near) ? 1 : 0);
 }
 
 function findCardNumber(lines: Line[]): string | null {
   let best: string | null = null;
   let bestScore = 0;
-  for (const l of lines) {
-    if (NOT_CARD.test(l.text)) continue;
+  let bestContext = 0;
+  lines.forEach((l, i) => {
+    if (NOT_CARD.test(l.text)) return;
     for (const raw of l.text.match(/[0-9*][0-9*\-]{10,}[0-9*]/g) ?? []) {
       const digits = raw.replace(/[^0-9*]/g, '').length;
       const score = raw.includes('*') ? 2 : digits === 16 ? 1 : 0;
-      if (score > bestScore) {
+      const context = cardContext(lines, i);
+      // 점수가 같으면 말머리로 가른다. 점수가 같은 후보가 둘일 때 먼저 나온 것을 집으면
+      // 제휴카드·포인트 카드 번호가 뽑힌다 — 결제 전표는 보통 영수증 아래쪽에 다시 찍힌다.
+      if (score > bestScore || (score === bestScore && score > 0 && context > bestContext)) {
         best = raw;
         bestScore = score;
+        bestContext = context;
       }
     }
-  }
+  });
   return best;
 }
 

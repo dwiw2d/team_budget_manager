@@ -190,6 +190,171 @@ describe("merchantOk: 거름망이 멀쩡한 상호를 버리지 않는다", () 
   it.each(drop)("상호로 받지 않는다: %s", (v) => expect(merchantOk(v)).toBe(false));
 });
 
+describe("금액 라벨 등급: 동점일 때 사용자가 낸 값을 고른다", () => {
+  it("진료비 서식에서 '총액' 대신 본인부담 '합계' 를 고른다", () => {
+    // 이 표는 총액·보험자부담·본인부담이 나란히 있다. 큰 값을 고르면 총액이 저장돼
+    // 카드 잔액이 틀어진다. 실제로 저장되는 값이라 인식률보다 이쪽이 더 중요하다.
+    const fields = linesToFields([
+      "약제비총액(1+2+3)   26,990 원",
+      "본인부담금(1)        8,000 원",
+      "보험자부담금(2)     18,990 원",
+      "합  계               8,000 원",
+    ]);
+    expect(extract(fields).amount).toBe(8000);
+  });
+
+  it("할인·쿠폰을 빼기 전 '합계' 대신 '결제금액' 을 고른다", () => {
+    const fields = linesToFields(["합계      13,400", "쿠폰      6,900", "할인      2,000", "결제금액   4,500"]);
+    expect(extract(fields).amount).toBe(4500);
+  });
+
+  it("공급가인 '판매금액' 이 두 번 나와도 '합계금액' 에 진다", () => {
+    const fields = linesToFields([
+      "[판 매 금 액] 90,909",
+      "[승 인 금 액] 100,000",
+      "판 매 금 액: 90,909",
+      "합 계 금 액: 100,000",
+    ]);
+    expect(extract(fields).amount).toBe(100000);
+  });
+
+  it("'판매금액' 밖에 없으면 그대로 쓴다", () => {
+    expect(extract(linesToFields(["판매금액   21,000"])).amount).toBe(21000);
+  });
+
+  it("라벨이 없으면 등급 차이가 없으므로 예전처럼 큰 값을 고른다", () => {
+    expect(extract(linesToFields(["아메리카노 4,500", "케이크 7,000"])).amount).toBe(7000);
+  });
+});
+
+describe("금액 라벨 사전: 자간 공백·영문·주문/티켓 서식", () => {
+  it.each([
+    ["총 주문금액   26,700원", 26700],
+    ["결제 요금 :  6,800원", 6800],
+    ["티켓정보: 조조성인8,000원", 8000],
+    ["TOTAL   8,000", 8000],
+    ["받은금액   21,000", 21000],
+    ["결 제 액   12,000", 12000],
+  ])("%s 를 금액 줄로 읽는다", (line, want) => {
+    expect(extract(linesToFields([line])).amount).toBe(want);
+  });
+});
+
+describe("금액 좌우 2단: 라벨 칸과 그 오른쪽 칸까지만 본다", () => {
+  it("오른쪽 끝의 '할 인 0' 을 합계 값으로 집지 않는다", () => {
+    const fields = linesToFields(["총 합 계        5,600     할 인        0"]);
+    expect(extract(fields).amount).toBe(5600);
+  });
+
+  it("라벨 칸에 숫자가 없으면 오른쪽 칸에서 값을 가져온다", () => {
+    const fields = linesToFields(["총수납금액   현  금        8,000 원"]);
+    expect(extract(fields).amount).toBe(8000);
+  });
+
+  it("라벨이 토막 경계에 걸려 쪼개지면 줄 통째로 다시 본다", () => {
+    // '-  합  계   11,400' 은 토막이 '-' / '합' / '계' / '11,400' 로 갈린다.
+    expect(extract(linesToFields(["-  합  계        11,400"])).amount).toBe(11400);
+  });
+
+  it("항목 번호 '(1+2+3)' 을 금액으로 집지 않는다", () => {
+    const fields = linesToFields(["약제비총액(1+2+3)        26,990 원", "합  계        8,000 원"]);
+    expect(extract(fields).amount).toBe(8000);
+  });
+
+  it("수량 칸을 낀 '합계수량/금액' 은 품목 소계라 결제액에 진다", () => {
+    const fields = linesToFields(["합계수량/금액      3      4,700", "해피포인트할인      -700", "합    계      3,680"]);
+    expect(extract(fields).amount).toBe(3680);
+  });
+
+  it("자릿수 칸에 한 자씩 찍힌 금액을 붙여 읽는다", () => {
+    expect(extract(linesToFields(["합계        4 4 0 0"])).amount).toBe(4400);
+  });
+
+  it("금액 라벨이 없는 줄의 한 자리 숫자 나열은 건드리지 않는다", () => {
+    expect(extract(linesToFields(["주문수량        4 4 0 0", "아메리카노 4,500"])).amount).toBe(4500);
+  });
+});
+
+describe("금액 fallback: 라벨이 하나도 없을 때", () => {
+  it("쉼표가 찍힌 숫자가 있으면 사업자번호·요금표 토막은 보지 않는다", () => {
+    const fields = linesToFields(["106-81-23498 (주)롯데리아 월드몰 3층점", "T-REX세트   5,600"]);
+    expect(extract(fields).amount).toBe(5600);
+  });
+
+  it("쉼표가 하나도 없으면 예전처럼 맨숫자 중 큰 값을 고른다", () => {
+    expect(extract(linesToFields(["아메리카노 4500", "케이크 7000"])).amount).toBe(7000);
+  });
+});
+
+describe("카드번호: 한 영수증에 둘일 때 결제한 카드를 고른다", () => {
+  it("제휴할인 카드 대신 신용카드 매출전표의 번호를 고른다", () => {
+    const fields = linesToFields([
+      "제휴카드 매출전표",
+      "[제 휴 사 명] KT 상시할인",
+      "[카 드 번 호] 2917-1013-****-1747",
+      "[승 인 번 호] 303849472008",
+      "신용카드 매출전표 [ 고 객 용 ]",
+      "[우리카드] 6556-20**-****-5200",
+    ]);
+    expect(extract(fields).cardNumber).toBe("6556-20**-****-5200");
+  });
+
+  it("포인트 적립 블록의 카드번호 대신 전표의 번호를 고른다", () => {
+    const fields = linesToFields([
+      "- GS통합 포인트 적립내역 -",
+      "카 드 번 호: 1019-17**-****-8350",
+      "누적 포인트:        641점",
+      "신용카드 전표(고객용)",
+      "카드번호     4061-07**-****-9316",
+    ]);
+    expect(extract(fields).cardNumber).toBe("4061-07**-****-9316");
+  });
+
+  it("후보가 하나뿐이면 말머리가 없어도 그대로 쓴다", () => {
+    expect(extract(linesToFields(["4265-8699-****-****"])).cardNumber).toBe("4265-8699-****-****");
+  });
+});
+
+describe("결제 일시: 날짜 표기·12시간제·여러 날짜", () => {
+  it.each([
+    ["2021년 4월 19일", "2021-04-19"],
+    ["2022년 07월 20일", "2022-07-20"],
+    ["거래일시 2022 12 30", "2022-12-30"],
+  ])("%s 를 날짜로 읽는다", (line, want) => {
+    expect(extract(linesToFields([line])).paidAt).toBe(`${want}T00:00:00+09:00`);
+  });
+
+  it("수량 표 칸을 공백 구분 날짜로 오인하지 않는다", () => {
+    expect(extract(linesToFields(["티셔츠 3 2 1"])).paidAt).toBe(null);
+  });
+
+  it.each([
+    ["시간: 오후 3:47", "15:47:00"],
+    ["시간: 오후 12:10", "12:10:00"],
+    ["시간: 오전 12:30", "00:30:00"],
+    ["시간: 오전 9:05", "09:05:00"],
+  ])("%s 를 24시간제로 바꾼다", (time, want) => {
+    expect(extract(linesToFields([`2025-09-21 ${time}`])).paidAt).toBe(`2025-09-21T${want}+09:00`);
+  });
+
+  it("날짜가 여럿이면 시각이 함께 찍힌 줄을 고른다", () => {
+    // 수납일·발행일·전표일시가 흩어진 진료비 영수증 판형이다.
+    const fields = linesToFields(["수납일 2022.06.23", "항목   급여", "2022년 07월 18일 17:18"]);
+    expect(extract(fields).paidAt).toBe("2022-07-18T17:18:00+09:00");
+  });
+
+  it("시각이 영수증에 딱 하나면 날짜와 멀어도 쓴다", () => {
+    const fields = linesToFields(["50912   2026-04-02(목)   POS-01", "칸쵸  1,500", "합계  1,500", "NO:1777  14:27"]);
+    expect(extract(fields).paidAt).toBe("2026-04-02T14:27:00+09:00");
+  });
+
+  it("멀리 있는 시각이 둘 이상이면 고르지 않고 자정으로 둔다", () => {
+    const fields = linesToFields(["2026-04-02(목)", "합계  1,500", "영업시간 09:00", "NO:1777  14:27"]);
+    expect(extract(fields).paidAt).toBe("2026-04-02T00:00:00+09:00");
+    expect(extract(fields).weak).toContain("paidAt");
+  });
+});
+
 describe("weak", () => {
   it("합계·총액 같은 낱말 없이 가장 큰 숫자로 고른 금액은 확신하지 않는다", () => {
     const noKeyword = linesToFields(["아메리카노 4,500", "케이크 7,000"]);
