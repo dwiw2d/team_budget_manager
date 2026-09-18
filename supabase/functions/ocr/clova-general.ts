@@ -69,21 +69,26 @@ const MERCHANT_BAD = new RegExp([
   '농협카드', '우리카드', '카카오뱅크',
   '테이블명', '판매사원', '영수번호', '상품', '단가', '수량', '금액', '품명',
   '사업자', 'TEL', '전화', '주소', '합계', '부가세', '공급가', '카드', '할부', 'TID',
-  // 사람 역할을 가리키는 말. 사업자번호 줄 위아래에 상호 대신 이 줄이 오는 영수증이 있다.
-  // '대표' 는 '대표자' 도 함께 거른다.
-  '대표', '사장', '점장', '담당', '계산원',
+  // '대표자' 는 합성어라 상호에 거의 안 나오므로 낱말 째로 거른다.
+  // '대표'/'사장'/'점장'/'담당'/'계산원' 은 상호 안에 박히는 일이 흔해(대표과일, 김사장네 곱창)
+  // 여기 두면 멀쩡한 상호를 버린다. 아래 MERCHANT_ROLE 에서 따로 본다.
+  '대표자',
   'VANKEY', '일시', '시간', 'POS', '승인', '매출', '영수증', '전표', '고객용', '회원용', '알림',
 ].join('|'), 'i');
 // 사업자등록번호 모양. 라벨 없이 번호만 찍는 영수증이 많다.
 const BIZNO = /\b\d{3}-\d{2}-\d{5}\b/;
 const ADDRESS = /^(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)/;
 // ADDRESS 는 시/도 이름으로 '시작'하는 주소만 거른다. "성남시 분당구 황새울로" 처럼 시/도가 빠진
-// 주소도 상호 자리에 올라오므로 주소 꼬리(…시/구/동/로/길, '번길'은 '길'에 포함)도 본다.
-// 단 꼬리 하나만으로 거르면 '맷돌로' 같은 상호까지 날아간다. 주소는 '구 + 로' 처럼 토막이 여러 개
-// 이어지지만 상호는 그렇지 않으므로, 꼬리 달린 토막이 둘 이상일 때만 주소로 본다.
-const ADDRESS_TAIL = /[시구동로길]$/;
-const looksAddress = (v: string): boolean =>
-  ADDRESS.test(v) || v.split(/\s+/).filter((t) => ADDRESS_TAIL.test(t)).length >= 2;
+// 주소도 상호 자리에 올라오므로 하나 더 본다. 단 '…동/…로/…길' 로 끝나는 토막은 세지 않는다 —
+// 한국 상호는 동네 이름으로 끝나는 일이 흔하고('정성스시 방배동'), 무엇보다 '시' 가 '스시' 를 잡는다.
+// 대신 주소에만 나오는 차례, 곧 '…시/군' 다음에 '…구/군/읍/면' 이 오는 꼴만 주소로 본다.
+const ADDRESS_FULL = /(^|\s)[가-힣]{2,}(시|군)\s+\S+(구|군|읍|면)(\s|$)/;
+const looksAddress = (v: string): boolean => ADDRESS.test(v) || ADDRESS_FULL.test(v);
+
+// 사람 역할을 가리키는 말. 사업자번호 줄 위아래에 상호 대신 "대표 홍길동" 이 오는 영수증이 있다.
+// 한글에는 \b 가 없어 부분 문자열로 걸면 '대표과일'·'계산원조갈비'까지 버린다. 그래서
+// (1) 역할어 앞이 줄머리나 공백이고 (2) 뒤에 공백이나 콜론으로 떨어진 사람 이름이 올 때만 건다.
+const MERCHANT_ROLE = /(^|\s)(대표|사장|점장|담당|계산원)(\s*[:：]\s*|\s+)[가-힣]{2,5}(\s|$)/;
 
 const squash = (s: string): string => s.replace(/\s+/g, '');
 const pad = (n: number): string => String(n).padStart(2, '0');
@@ -238,14 +243,14 @@ function findCardNumber(lines: Line[]): string | null {
   return best;
 }
 
-/** 상호로 쓸 만한 글자인지. 아니면 비워 두는 편이 낫다. */
-function merchantOk(text: string): boolean {
+/** 상호로 쓸 만한 글자인지. 아니면 비워 두는 편이 낫다. (테스트에서 직접 부른다) */
+export function merchantOk(text: string): boolean {
   const v = text.trim();
   if (v.length < 2 || v.length > 20) return false;
   if (/[[\]]/.test(v)) return false; // "[고객용]" 같은 말머리
   if (/\d{3}/.test(v)) return false; // 번호·금액이 섞인 줄
   if ((v.match(/[가-힣A-Za-z]/g) ?? []).length < 2) return false;
-  return !looksAddress(v) && !MERCHANT_BAD.test(v);
+  return !looksAddress(v) && !MERCHANT_BAD.test(v) && !MERCHANT_ROLE.test(v);
 }
 
 /** sure=false 면 라벨 없는 번호 줄 위라는 자리만 보고 고른 값이라 확신이 없다. */

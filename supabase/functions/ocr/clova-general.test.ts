@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { extract, linesFromFields } from "./clova-general.ts";
+import { extract, linesFromFields, merchantOk } from "./clova-general.ts";
 import { resolve } from "./merge.ts";
 import { receipt1Fields, receipt2Fields, receipt3Fields } from "./clova-general.fixtures.ts";
 
@@ -132,6 +132,32 @@ describe("상호 규칙 (c): 자리만 보고 고른 값", () => {
     expect(extract(fields).merchant).toBeNull();
     expect(extract(fields).weak).toContain("merchant");
   });
+});
+
+describe("merchantOk: 거름망이 멀쩡한 상호를 버리지 않는다", () => {
+  // 역할어와 주소 꼬리를 부분 문자열로 걸렀더니 아래 상호들이 통째로 날아갔다.
+  const keep = [
+    // 역할 낱말이 상호 안에 박힌 경우
+    "대표과일", "대표김밥", "대표약국", "대표떡볶이", "사장님갈비", "사장님이미쳤어요",
+    "김사장네 곱창", "점장수제버거", "담당김밥천국", "계산원조갈비",
+    // 주소 접미사가 상호 안에 박힌 경우
+    "정성스시 방배동", "하루스시 논현로", "미소야 스시 역삼동", "쿠우쿠우 스시 명동",
+    "무교동 낙지 을지로", "샤로수길 커피 봉천동",
+    // 원래도 살아 있던 것들
+    "맷돌로", "해오름길", "종로설렁탕", "구로반점", "동대문엽기떡볶이", "이로운약국",
+    "강남면옥", "일로와호프", "길동이네", "시장통닭", "로데오피자", "분당돈까스",
+    "상동칼국수", "서현역국밥",
+  ];
+  const drop = [
+    "대표 홍길동",          // 역할어 + 사람 이름
+    "담당 이영희",
+    "계산원 : 초기사용자",  // 맷돌로만 영수증에 실제로 있는 줄
+    "대표자 손석원",
+    "성남시 분당구 황새울로", // 시/도 없이 시작하는 전체 주소
+  ];
+
+  it.each(keep)("상호로 받는다: %s", (v) => expect(merchantOk(v)).toBe(true));
+  it.each(drop)("상호로 받지 않는다: %s", (v) => expect(merchantOk(v)).toBe(false));
 });
 
 describe("weak", () => {
