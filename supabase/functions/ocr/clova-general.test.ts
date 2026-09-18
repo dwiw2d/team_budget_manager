@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { extract, linesFromFields } from "./clova-general.ts";
+import { resolve } from "./merge.ts";
 import { receipt1Fields, receipt2Fields, receipt3Fields } from "./clova-general.fixtures.ts";
 
 describe("extract", () => {
@@ -13,7 +14,7 @@ describe("extract", () => {
     });
   });
 
-  it("receipt-2: POS 카드판매 영수증에서 네 필드를 뽑는다", () => {
+  it("receipt-2: POS 카드판매 영수증에서 네 필드를 뽑는다 ('사업자번호' 라벨 줄 위라 확신한다)", () => {
     expect(extract(receipt2Fields)).toEqual({
       merchant: "세상끝의라멘",
       paidAt: "2026-09-15T12:38:27+09:00",
@@ -23,13 +24,13 @@ describe("extract", () => {
     });
   });
 
-  it("receipt-3: 라벨 없는 사업자번호 줄 위에서 상호를 뽑는다", () => {
+  it("receipt-3: 라벨 없는 번호 줄 위에서 상호를 뽑되, 확신하지 않고 weak 를 단다", () => {
     expect(extract(receipt3Fields)).toEqual({
       merchant: "맷돌로만(가산디지털점)",
       paidAt: "2026-09-18T11:57:00+09:00",
       amount: 21000,
       cardNumber: "4265-8699-****-****",
-      weak: [],
+      weak: ["merchant"],
     });
   });
 
@@ -83,6 +84,53 @@ describe("extract", () => {
     expect(extract(noMerchant).merchant).toBeNull();
     expect(extract(noMerchant).weak).toEqual(["merchant"]);
     expect(extract(noMerchant).amount).toBe(36000); // 나머지 필드는 그대로 나온다
+  });
+});
+
+describe("상호 규칙 (c) 의 weak 가 화면의 '확인해 주세요' 까지 이어진다", () => {
+  // resolve 가 weak 를 uncertain 으로 옮기고, 결제 추가 화면이 uncertain 칸을 표시한다.
+
+  it("receipt-3: Gemini 가 없거나 실패해도 CLOVA 상호는 남고 uncertain 에 merchant 가 담긴다", async () => {
+    const { weak, ...values } = extract(receipt3Fields);
+    const result = await resolve({ ok: true, values, weak }, async () => null);
+    expect(result?.merchant).toBe("맷돌로만(가산디지털점)");
+    expect(result?.uncertain).toContain("merchant");
+  });
+
+  it("receipt-2: 라벨로 찾은 상호는 확신하므로 Gemini 를 아예 부르지 않는다", async () => {
+    const askGemini = vi.fn().mockResolvedValue(null);
+    const { weak, ...values } = extract(receipt2Fields);
+    const result = await resolve({ ok: true, values, weak }, askGemini);
+    expect(askGemini).not.toHaveBeenCalled();
+    expect(result?.uncertain).toEqual([]);
+  });
+});
+
+describe("상호 규칙 (c): 자리만 보고 고른 값", () => {
+  // 사업자번호 줄 '바로 윗줄'이 늘 상호인 것은 아니다. 아래 셋은 실제로 파서를 속였다.
+  // 틀린 값을 확신해서 내보내면 2단계 Gemini 보완도, 화면의 "확인해 주세요" 표시도 함께 닫힌다.
+
+  it("윗줄이 '대표 <이름>' 이면 상호로 고르지 않는다", () => {
+    const fields = [line("행복식당", 0), line("대표 홍길동", 40), line("123-45-67890", 80)];
+    expect(extract(fields).merchant).toBeNull();
+    expect(extract(fields).weak).toContain("merchant");
+  });
+
+  it("윗줄이 시/도 이름 없이 시작하는 주소면 상호로 고르지 않는다", () => {
+    const fields = [line("스타벅스 서현점", 0), line("성남시 분당구 황새울로", 40), line("123-45-67890", 80)];
+    expect(extract(fields).merchant).toBeNull();
+    expect(extract(fields).weak).toContain("merchant");
+  });
+
+  it("3-2-5 모양의 영수번호를 사업자번호로 착각해 그 윗줄을 상호로 고르지 않는다", () => {
+    const fields = [
+      line("담당 이영희", 0),
+      line("No 001-22-33444", 40),
+      line("행복식당", 80),
+      line("123-45-67890", 120),
+    ];
+    expect(extract(fields).merchant).toBeNull();
+    expect(extract(fields).weak).toContain("merchant");
   });
 });
 

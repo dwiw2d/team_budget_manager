@@ -68,12 +68,22 @@ const MERCHANT_BAD = new RegExp([
   '국민카드', '신한카드', '삼성카드', '현대카드', '롯데카드', '하나카드', 'BC카드', '비씨카드',
   '농협카드', '우리카드', '카카오뱅크',
   '테이블명', '판매사원', '영수번호', '상품', '단가', '수량', '금액', '품명',
-  '사업자', '대표자', 'TEL', '전화', '주소', '합계', '부가세', '공급가', '카드', '할부', 'TID',
+  '사업자', 'TEL', '전화', '주소', '합계', '부가세', '공급가', '카드', '할부', 'TID',
+  // 사람 역할을 가리키는 말. 사업자번호 줄 위아래에 상호 대신 이 줄이 오는 영수증이 있다.
+  // '대표' 는 '대표자' 도 함께 거른다.
+  '대표', '사장', '점장', '담당', '계산원',
   'VANKEY', '일시', '시간', 'POS', '승인', '매출', '영수증', '전표', '고객용', '회원용', '알림',
 ].join('|'), 'i');
 // 사업자등록번호 모양. 라벨 없이 번호만 찍는 영수증이 많다.
 const BIZNO = /\b\d{3}-\d{2}-\d{5}\b/;
 const ADDRESS = /^(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)/;
+// ADDRESS 는 시/도 이름으로 '시작'하는 주소만 거른다. "성남시 분당구 황새울로" 처럼 시/도가 빠진
+// 주소도 상호 자리에 올라오므로 주소 꼬리(…시/구/동/로/길, '번길'은 '길'에 포함)도 본다.
+// 단 꼬리 하나만으로 거르면 '맷돌로' 같은 상호까지 날아간다. 주소는 '구 + 로' 처럼 토막이 여러 개
+// 이어지지만 상호는 그렇지 않으므로, 꼬리 달린 토막이 둘 이상일 때만 주소로 본다.
+const ADDRESS_TAIL = /[시구동로길]$/;
+const looksAddress = (v: string): boolean =>
+  ADDRESS.test(v) || v.split(/\s+/).filter((t) => ADDRESS_TAIL.test(t)).length >= 2;
 
 const squash = (s: string): string => s.replace(/\s+/g, '');
 const pad = (n: number): string => String(n).padStart(2, '0');
@@ -235,23 +245,31 @@ function merchantOk(text: string): boolean {
   if (/[[\]]/.test(v)) return false; // "[고객용]" 같은 말머리
   if (/\d{3}/.test(v)) return false; // 번호·금액이 섞인 줄
   if ((v.match(/[가-힣A-Za-z]/g) ?? []).length < 2) return false;
-  return !ADDRESS.test(v) && !MERCHANT_BAD.test(v);
+  return !looksAddress(v) && !MERCHANT_BAD.test(v);
 }
 
-function findMerchant(lines: Line[]): string | null {
+/** sure=false 면 라벨 없는 번호 줄 위라는 자리만 보고 고른 값이라 확신이 없다. */
+function findMerchant(lines: Line[]): { value: string | null; sure: boolean } {
   // (a) "상호:" / "가맹점명:" 라벨 값. 콜론이 있어야 한다 — 콜론을 안 따지면 VAN 안내 문구
   //     "가맹점명/주소가 실제와 다른경우" 가 통째로 상호로 잡힌다.
   for (const l of lines) {
     const m = l.text.match(/(?:가맹점\s*명|상\s*호)\s*[:：]\s*(.+)$/);
-    if (m && merchantOk(m[1])) return m[1].trim();
+    if (m && merchantOk(m[1])) return { value: m[1].trim(), sure: true };
   }
 
   // (c) 사업자번호 줄 바로 위 줄. POS 영수증은 제목 / 상호 / 사업자번호 순서로 찍힌다.
   //     (b) 보다 먼저 본다 — 상호가 제 줄에 따로 있는데도 사업자번호 줄 오른쪽 끝의
   //     대표자 이름을 집어가는 일이 있다("321-98-76543 TEL)... 박민수").
   //     라벨 없이 번호만 찍는 영수증이 있어 '사업자번호' 글자와 번호 모양을 둘 다 본다.
+  //     확신도는 라벨 유무로 가른다. '사업자번호' 글자가 실제로 찍힌 줄은 POS 가 만든 머리글이라
+  //     제목 / 상호 / 사업자번호 차례가 거의 지켜진다. 반대로 라벨 없이 3-2-5 숫자 모양만 보고
+  //     찾은 줄은 영수번호 같은 다른 번호일 수 있고("No 001-22-33444") 윗줄도 상호가 아닐 때가
+  //     많다. 그래서 숫자 모양으로 찾았으면 확신하지 않는다(sure=false) — 2단계 Gemini 가
+  //     교차 확인하고 화면에도 "확인해 주세요" 가 뜬다.
   const i = lines.findIndex((l) => squash(l.text).includes('사업자번호') || BIZNO.test(l.text));
-  if (i > 0 && merchantOk(lines[i - 1].text)) return lines[i - 1].text.trim();
+  if (i > 0 && merchantOk(lines[i - 1].text)) {
+    return { value: lines[i - 1].text.trim(), sure: squash(lines[i].text).includes('사업자번호') };
+  }
 
   // (b) 대표자/TEL 이 있는 줄의 오른쪽 끝 토막. 위쪽이 VAN 안내 문구로 덮인 카드 승인전표는
   //     상호가 "홍길동 (TEL:...)        동남집" 처럼 여기에만 찍힌다.
@@ -262,10 +280,10 @@ function findMerchant(lines: Line[]): string | null {
     const prev = l.words[l.words.length - 2];
     if (!last || !prev || last.left - prev.right < last.height * 2) continue;
     if (last.text === l.text.match(/대표자\s*[:：]?\s*(\S+)/)?.[1]) continue; // 대표자 이름은 상호가 아니다
-    if (merchantOk(last.text)) return last.text.trim();
+    if (merchantOk(last.text)) return { value: last.text.trim(), sure: true };
   }
 
-  return null; // 확신이 없으면 비워 둔다. Gemini 나 사용자가 채운다.
+  return { value: null, sure: false }; // 확신이 없으면 비워 둔다. Gemini 나 사용자가 채운다.
 }
 
 /** fields -> 네 필드 + weak. 확신 없으면 그 항목만 null 이고, 이름이 weak 에 들어간다. */
@@ -276,12 +294,12 @@ export function extract(fields: OcrField[]): Extracted {
   const paidAt = findPaidAt(lines);
 
   const weak: string[] = [];
-  if (merchant === null) weak.push('merchant');
+  if (merchant.value === null || !merchant.sure) weak.push('merchant');
   if (amount.value === null || !amount.keyed) weak.push('amount');
   if (paidAt.value === null || !paidAt.hasTime) weak.push('paidAt');
 
   return {
-    merchant,
+    merchant: merchant.value,
     paidAt: paidAt.value,
     amount: amount.value,
     cardNumber: findCardNumber(lines), // 영수증에 원래 없는 경우가 많아 weak 에 넣지 않는다
