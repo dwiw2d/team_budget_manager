@@ -3,6 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- GitHub Pages 는 HTTP 헤더를 넣을 수 없어 CSP 를 meta 로 둔다. Supabase 출처는 빌드 때 채워진다.
+         frame-ancestors 는 meta 로는 무시되므로 nginx.conf 쪽에만 둔다. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: %VITE_SUPABASE_URL%; connect-src 'self' %VITE_SUPABASE_URL%; font-src 'self'; manifest-src 'self'; worker-src 'self'; form-action 'self'"
+    />
     <meta name="theme-color" content="#0f172a" />
     <link rel="icon" href="/icons/icon.svg" type="image/svg+xml" />
     <title>SW2HW 장부</title>

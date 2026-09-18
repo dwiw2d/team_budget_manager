@@ -9,6 +9,7 @@ import {
   listPaymentsByMonth,
   updatePaymentMemo,
 } from "../lib/db";
+import { userMessage } from "../lib/errors";
 import { formatWon } from "../lib/money";
 import type { CardBalance, PaymentWithCard } from "../lib/types";
 
@@ -70,7 +71,7 @@ function Sheet({
       await fn();
       onChanged();
     } catch (e) {
-      setError((e as Error).message);
+      setError(userMessage(e, "저장하지 못했습니다"));
       setBusy(false);
     }
   }
@@ -174,7 +175,7 @@ export default function Payments() {
   useEffect(() => {
     listCardBalances()
       .then(setCards)
-      .catch((e) => setError((e as Error).message));
+      .catch((e) => setError(userMessage(e, "카드 목록을 불러오지 못했습니다")));
   }, []);
 
   const load = useCallback(async () => {
@@ -183,7 +184,7 @@ export default function Payments() {
         await listPaymentsByMonth({ ...monthRange(ym.year, ym.month), cardId: cardId || undefined }),
       );
     } catch (e) {
-      setError((e as Error).message);
+      setError(userMessage(e, "결제 내역을 불러오지 못했습니다"));
     }
   }, [ym, cardId]);
 

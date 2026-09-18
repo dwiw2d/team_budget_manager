@@ -10,6 +10,7 @@ import {
   Routes,
   useLocation,
 } from "react-router-dom";
+import { useRegisterSW } from "virtual:pwa-register/react";
 import { supabase } from "./lib/supabase";
 import AddPayment from "./pages/AddPayment";
 import Cards from "./pages/Cards";
@@ -81,6 +82,10 @@ export default function App() {
   // undefined = 세션 확인 전(INITIAL_SESSION 대기)
   const [session, setSession] = useState<Session | null>();
   const online = useOnline();
+  // registerType 이 autoUpdate 라 새 서비스 워커는 곧바로 자리를 잡지만 열려 있는 화면은 옛 JS 를 계속 쓴다.
+  // onNeedReload 를 주면 플러그인이 말없이 새로고침하는 대신 아래 막대를 띄운다.
+  const [needReload, setNeedReload] = useState(false);
+  useRegisterSW({ onNeedReload: () => setNeedReload(true) });
 
   useEffect(() => {
     const {
@@ -96,6 +101,18 @@ export default function App() {
       {!online && (
         <div className="sticky top-0 z-10 bg-red-600 px-4 pb-2 pt-[calc(env(safe-area-inset-top)+0.5rem)] text-center text-sm text-white">
           네트워크 연결을 확인하세요
+        </div>
+      )}
+      {needReload && (
+        <div className="sticky top-0 z-10 flex items-center justify-center gap-2 bg-slate-900 px-4 pb-2 pt-[calc(env(safe-area-inset-top)+0.5rem)] text-sm text-white">
+          새 버전이 있습니다.
+          <button
+            type="button"
+            className="min-h-11 px-2 font-bold underline"
+            onClick={() => window.location.reload()}
+          >
+            새로고침
+          </button>
         </div>
       )}
       <Routes>

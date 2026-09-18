@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { btnPrimary, btnSecondary, h1, h2, input, label } from "../components/ui";
 import { OWNER_EMAIL, PIN_LENGTH, isPin, onlyDigits } from "../lib/auth";
+import { userMessage } from "../lib/errors";
 import { supabase } from "../lib/supabase";
 
 export default function Settings() {
@@ -33,7 +34,7 @@ export default function Settings() {
     }
     const { error } = await supabase.auth.updateUser({ password: pin });
     setBusy(false);
-    if (error) return setError(error.message);
+    if (error) return setError(userMessage(error, "PIN 을 변경하지 못했습니다"));
     setCurrentPin("");
     setPin("");
     setPin2("");
