@@ -444,7 +444,10 @@ function labelledMerchant(line: Line): string | null {
   return null;
 }
 
-/** sure=false 면 라벨 없는 번호 줄 위라는 자리만 보고 고른 값이라 확신이 없다. */
+/**
+ * sure=false 면 라벨이 가리킨 값이 아니라 자리만 보고 고른 값이라 확신이 없다 —
+ * 라벨 없는 번호 줄 언저리(c), 위로 더 올라간 줄(c2), 앵커 없이 맨 위 줄(d)이 그렇다.
+ */
 function findMerchant(lines: Line[]): { value: string | null; sure: boolean } {
   // (a) "상호:" / "가맹점명:" 같은 라벨의 값.
   //     콜론은 선택이다 — 표 칸이라 "상  호   열매약국" 처럼 공백으로만 떨어진 영수증이 많다.
