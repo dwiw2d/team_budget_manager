@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { extract, linesFromFields } from "./clova-general.ts";
+import { describe, expect, it, vi } from "vitest";
+import { extract, linesFromFields, merchantOk } from "./clova-general.ts";
+import { resolve } from "./merge.ts";
 import { receipt1Fields, receipt2Fields, receipt3Fields } from "./clova-general.fixtures.ts";
 
 describe("extract", () => {
@@ -13,7 +14,7 @@ describe("extract", () => {
     });
   });
 
-  it("receipt-2: POS 카드판매 영수증에서 네 필드를 뽑는다", () => {
+  it("receipt-2: POS 카드판매 영수증에서 네 필드를 뽑는다 ('사업자번호' 라벨 줄 위라 확신한다)", () => {
     expect(extract(receipt2Fields)).toEqual({
       merchant: "세상끝의라멘",
       paidAt: "2026-09-15T12:38:27+09:00",
@@ -23,13 +24,13 @@ describe("extract", () => {
     });
   });
 
-  it("receipt-3: 라벨 없는 사업자번호 줄 위에서 상호를 뽑는다", () => {
+  it("receipt-3: 라벨 없는 번호 줄 위에서 상호를 뽑되, 확신하지 않고 weak 를 단다", () => {
     expect(extract(receipt3Fields)).toEqual({
       merchant: "맷돌로만(가산디지털점)",
       paidAt: "2026-09-18T11:57:00+09:00",
       amount: 21000,
       cardNumber: "4265-8699-****-****",
-      weak: [],
+      weak: ["merchant"],
     });
   });
 
@@ -84,6 +85,79 @@ describe("extract", () => {
     expect(extract(noMerchant).weak).toEqual(["merchant"]);
     expect(extract(noMerchant).amount).toBe(36000); // 나머지 필드는 그대로 나온다
   });
+});
+
+describe("상호 규칙 (c) 의 weak 가 화면의 '확인해 주세요' 까지 이어진다", () => {
+  // resolve 가 weak 를 uncertain 으로 옮기고, 결제 추가 화면이 uncertain 칸을 표시한다.
+
+  it("receipt-3: Gemini 가 없거나 실패해도 CLOVA 상호는 남고 uncertain 에 merchant 가 담긴다", async () => {
+    const { weak, ...values } = extract(receipt3Fields);
+    const result = await resolve({ ok: true, values, weak }, async () => null);
+    expect(result?.merchant).toBe("맷돌로만(가산디지털점)");
+    expect(result?.uncertain).toContain("merchant");
+  });
+
+  it("receipt-2: 라벨로 찾은 상호는 확신하므로 Gemini 를 아예 부르지 않는다", async () => {
+    const askGemini = vi.fn().mockResolvedValue(null);
+    const { weak, ...values } = extract(receipt2Fields);
+    const result = await resolve({ ok: true, values, weak }, askGemini);
+    expect(askGemini).not.toHaveBeenCalled();
+    expect(result?.uncertain).toEqual([]);
+  });
+});
+
+describe("상호 규칙 (c): 자리만 보고 고른 값", () => {
+  // 사업자번호 줄 '바로 윗줄'이 늘 상호인 것은 아니다. 아래 셋은 실제로 파서를 속였다.
+  // 틀린 값을 확신해서 내보내면 2단계 Gemini 보완도, 화면의 "확인해 주세요" 표시도 함께 닫힌다.
+
+  it("윗줄이 '대표 <이름>' 이면 상호로 고르지 않는다", () => {
+    const fields = [line("행복식당", 0), line("대표 홍길동", 40), line("123-45-67890", 80)];
+    expect(extract(fields).merchant).toBeNull();
+    expect(extract(fields).weak).toContain("merchant");
+  });
+
+  it("윗줄이 시/도 이름 없이 시작하는 주소면 상호로 고르지 않는다", () => {
+    const fields = [line("스타벅스 서현점", 0), line("성남시 분당구 황새울로", 40), line("123-45-67890", 80)];
+    expect(extract(fields).merchant).toBeNull();
+    expect(extract(fields).weak).toContain("merchant");
+  });
+
+  it("3-2-5 모양의 영수번호를 사업자번호로 착각해 그 윗줄을 상호로 고르지 않는다", () => {
+    const fields = [
+      line("담당 이영희", 0),
+      line("No 001-22-33444", 40),
+      line("행복식당", 80),
+      line("123-45-67890", 120),
+    ];
+    expect(extract(fields).merchant).toBeNull();
+    expect(extract(fields).weak).toContain("merchant");
+  });
+});
+
+describe("merchantOk: 거름망이 멀쩡한 상호를 버리지 않는다", () => {
+  // 역할어와 주소 꼬리를 부분 문자열로 걸렀더니 아래 상호들이 통째로 날아갔다.
+  const keep = [
+    // 역할 낱말이 상호 안에 박힌 경우
+    "대표과일", "대표김밥", "대표약국", "대표떡볶이", "사장님갈비", "사장님이미쳤어요",
+    "김사장네 곱창", "점장수제버거", "담당김밥천국", "계산원조갈비",
+    // 주소 접미사가 상호 안에 박힌 경우
+    "정성스시 방배동", "하루스시 논현로", "미소야 스시 역삼동", "쿠우쿠우 스시 명동",
+    "무교동 낙지 을지로", "샤로수길 커피 봉천동",
+    // 원래도 살아 있던 것들
+    "맷돌로", "해오름길", "종로설렁탕", "구로반점", "동대문엽기떡볶이", "이로운약국",
+    "강남면옥", "일로와호프", "길동이네", "시장통닭", "로데오피자", "분당돈까스",
+    "상동칼국수", "서현역국밥",
+  ];
+  const drop = [
+    "대표 홍길동",          // 역할어 + 사람 이름
+    "담당 이영희",
+    "계산원 : 초기사용자",  // 맷돌로만 영수증에 실제로 있는 줄
+    "대표자 손석원",
+    "성남시 분당구 황새울로", // 시/도 없이 시작하는 전체 주소
+  ];
+
+  it.each(keep)("상호로 받는다: %s", (v) => expect(merchantOk(v)).toBe(true));
+  it.each(drop)("상호로 받지 않는다: %s", (v) => expect(merchantOk(v)).toBe(false));
 });
 
 describe("weak", () => {
@@ -144,3 +218,25 @@ function line(text: string, top: number) {
     },
   };
 }
+
+describe("merchantOk: '…스시'·'…장군' 상호를 주소로 오인하지 않는다", () => {
+  // ADDRESS_FULL 의 첫 토막이 '한글 2자 이상 + 시/군' 이라 '회전스시'·'이순신장군' 이 지명으로 읽혔다.
+  const keep = [
+    "회전스시 서면", "미소스시 서면", "정성스시 서면", "오마카세스시 서면", "일품스시 서면",
+    "대게스시 서면", "정성스시 서면 본점", "하루스시 서면 2호점", "하루스시 냉면", "정성스시 냉면",
+    "정성스시 물냉면", "회전스시 메밀면", "초밥스시 우동면", "미소스시 우동면", "회전스시 라면",
+    "이순신장군 냉면", "해물장군 라면", "회전스시 조치원읍", "미소스시 화도읍",
+  ];
+  // 시/군 다음에 구/군/읍/면 이 오는 진짜 주소는 그대로 걸려야 한다.
+  const drop = [
+    "성남시 분당구 황새울로", "화성시 동탄면 어울림로", "안동시 풍천면", "김포시 통진읍",
+  ];
+
+  it.each(keep)("상호로 받는다: %s", (v) => expect(merchantOk(v)).toBe(true));
+  it.each(drop)("상호로 받지 않는다: %s", (v) => expect(merchantOk(v)).toBe(false));
+
+  // 둘째 토막이 구/군/읍/면 으로 안 끝나면 주소로 보지 않는다. '양평군 한우마을' 은 상호로 살아남는다.
+  it("'군 + 일반 낱말' 은 주소로 보지 않는다", () => {
+    expect(merchantOk("양평군 한우마을")).toBe(true);
+  });
+});
