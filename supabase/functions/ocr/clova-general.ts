@@ -49,9 +49,18 @@ export interface Extracted {
 
 const KRW = /\d{1,3}(?:,\d{3})+|\d+/g;
 
-// 금액 줄로 인정하는 낱말 (공백 제거 후 비교)
-const AMOUNT_YES = ['합계', '총액', '받을금액', '결제금액', '판매금액', '카드매출', '총금액'];
-// 금액 줄에서 빼는 낱말. YES 를 먼저 보므로 "결제금액" 이 "금액" 때문에 빠지지 않는다.
+// 금액 줄로 인정하는 낱말 (공백 제거 후 비교). 세 등급으로 나눈다 — 등급이 높은 쪽만 쓴다.
+// 진료비·약제비 영수증은 한 표 안에 총액·공단부담·본인부담이 나란히 있어서, 등급 없이
+// 다수결만 하면 '사용자가 낸 돈'이 아니라 '총액'이 뽑힌다. 그 값을 저장하면 카드 잔액이 틀어진다.
+//
+// 2등급 — 사용자가 실제로 낸 돈을 가리키는 라벨.
+const AMOUNT_PAID = ['본인부담', '납부할금액', '수납금액', '받을금액', '결제금액'];
+// 1등급 — 어느 쪽인지 알 수 없는 총계 낱말.
+const AMOUNT_SUM = ['합계', '판매금액', '카드매출', '총금액'];
+// 0등급 — 사용자가 낸 돈이 아닌 금액. 후보에서 빼지는 않는다(이것밖에 없는 영수증이 있다).
+const AMOUNT_OTHER = ['총액', '공단부담', '보험자부담', '비급여', '급여'];
+const AMOUNT_TIERS = [AMOUNT_OTHER, AMOUNT_SUM, AMOUNT_PAID];
+// 금액 줄에서 빼는 낱말. 위 세 등급을 먼저 보므로 "결제금액" 이 "금액" 때문에 빠지지 않는다.
 const AMOUNT_NO = ['부가세', '공급가', '단가', '금액', '과세물품', '면세', '봉사료', '거스름'];
 
 const DATE_LABELS = ['거래일시', '승인일시', '판매시간', '거래일자', '승인일자', '결제일시'];
@@ -182,18 +191,28 @@ function lastNumber(text: string): number | null {
 }
 
 /** keyed=false 면 "합계" 같은 낱말 없이 "가장 큰 숫자" 규칙으로 고른 값이라 확신이 없다. */
+/** 라벨 등급. 라벨이 없으면 -1. 여러 등급이 섞인 줄은 높은 쪽을 따른다. */
+function amountTier(squashed: string): number {
+  for (let t = AMOUNT_TIERS.length - 1; t >= 0; t -= 1) {
+    if (AMOUNT_TIERS[t].some((k) => squashed.includes(k))) return t;
+  }
+  return -1;
+}
+
 function findAmount(lines: Line[]): { value: number | null; keyed: boolean } {
-  const keyed: number[] = [];
+  const keyed: Array<{ tier: number; value: number }> = [];
   for (const l of lines) {
-    const s = squash(l.text);
-    if (!AMOUNT_YES.some((k) => s.includes(k))) continue; // YES 가 NO 보다 세다 ("합계금액(부가세포함)")
+    const tier = amountTier(squash(l.text)); // 등급이 NO 보다 세다 ("합계금액(부가세포함)")
+    if (tier < 0) continue;
     const n = lastNumber(l.text);
-    if (n !== null && n > 0) keyed.push(n);
+    if (n !== null && n > 0) keyed.push({ tier, value: n });
   }
   if (keyed.length) {
-    // 같은 값이 여러 번이면 그 값, 아니면 가장 많이 나온 값.
+    // 가장 높은 등급만 남기고 그 안에서 다수결. 같은 표수면 큰 값 — 등급으로 이미 갈랐으므로
+    // 여기 남은 것들은 같은 뜻의 금액이고, 큰 쪽이 부분합이 아닌 총계일 때가 많다.
+    const top = Math.max(...keyed.map((k) => k.tier));
     const tally = new Map<number, number>();
-    for (const n of keyed) tally.set(n, (tally.get(n) ?? 0) + 1);
+    for (const k of keyed) if (k.tier === top) tally.set(k.value, (tally.get(k.value) ?? 0) + 1);
     return { value: [...tally].sort((a, b) => b[1] - a[1] || b[0] - a[0])[0][0], keyed: true };
   }
 
