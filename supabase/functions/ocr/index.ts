@@ -4,6 +4,12 @@
 //        GEMINI_API_KEY 가 있으면 Gemini 를 부른다. 부를지 말지는 merge.ts 의 resolve 가 정한다.
 // 두 제공자 모두 남은 무료 한도를 물어볼 수 있는 API 가 없으므로 우리가 직접 센다(0005 마이그레이션).
 //   부르기 직전에 ocr_quota_consume 으로 1건을 선차감하고, 제공자가 한도 초과를 알려 오면 ocr_quota_exhaust 로 기간을 닫는다.
+//   모델이 일을 하나도 하지 않은 실패(Gemini 5xx·시간 초과)로 끝나면 ocr_quota_refund 로 선차감분을 되돌린다(0010 마이그레이션).
+// 실행 시간 예산: 무료 요금제의 Edge Function 은 wall clock 150초를 넘기면 함수가 통째로 끊긴다
+//   (Supabase Functions Limits, Free 150s / Paid 400s — https://supabase.com/docs/guides/functions/limits).
+//   끊기면 사용자는 504 만 받고 선차감한 한도를 되돌릴 기회(ocr_quota_refund)조차 사라지므로, 호출마다 상한을 건다:
+//   CLOVA 20초 + Gemini 25초 × 3회 + 재시도 대기 (1+3)초 = 최악 99초. 남은 51초가 인증·한도 RPC 와 응답 몫이다.
+//   재시도 횟수나 상한을 늘리려면 이 합이 150초 안에 남는지 먼저 계산해라.
 // config.toml 의 [functions.ocr] verify_jwt = false 이므로 JWT 는 여기서 직접 검증한다.
 // 이 파일은 Deno 전용이라 tsconfig 의 typecheck 대상에서 제외되어 있다(exclude).
 import { createClient } from "npm:@supabase/supabase-js@2";
@@ -12,7 +18,15 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 // ./cors 하위 경로는 @supabase/supabase-js 2.116.0 의 package.json exports 에 있다.
 import { corsHeaders as sdkCors } from "npm:@supabase/supabase-js@2/cors";
 import { extract, type OcrField } from "./clova-general.ts";
-import { buildRequest, DEFAULT_MODEL, parseResponse, type GeminiResult } from "./gemini.ts";
+import {
+  buildRequest,
+  type GeminiResult,
+  modelChain,
+  parseResponse,
+  RETRY_DELAYS_MS,
+  shouldRetry,
+  TIMEOUT_MS as GEMINI_TIMEOUT_MS,
+} from "./gemini.ts";
 import { type ClovaOutcome, merge, resolve } from "./merge.ts";
 import { decideProviders, isQuotaExceeded, type OcrQuota } from "./quota.ts";
 import { receipt1Fields } from "./clova-general.fixtures.ts";
@@ -35,6 +49,9 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 const MAX_IMAGE_BASE64 = 5 * 1024 * 1024; // 5MB (base64 문자열 기준)
+// 1단계 호출 하나의 상한(ms). 위 실행 시간 예산에서 나온 값이다. Gemini 몫은 gemini.ts 의 TIMEOUT_MS 다.
+// AbortSignal.timeout 은 Deno 가 표준대로 지원한다 (https://docs.deno.com/api/web/~/AbortSignal).
+const CLOVA_TIMEOUT_MS = 20_000;
 const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 
 function json(status: number, body: unknown): Response {
@@ -63,32 +80,54 @@ async function exhaust(db: Db, provider: string): Promise<void> {
   await db.rpc("ocr_quota_exhaust", { p_provider: provider });
 }
 
-/** 2단계. 실패는 오류로 만들지 않는다(보조일 뿐이다). 한도 초과 응답만 따로 알린다. */
+/** 선차감을 되돌린다. 모델이 일을 하나도 하지 않은 실패(503 등)에만 쓴다(0010 마이그레이션). */
+async function refund(db: Db, provider: string): Promise<void> {
+  await db.rpc("ocr_quota_refund", { p_provider: provider });
+}
+
+/** 2단계. 실패는 오류로 만들지 않는다(보조일 뿐이다). 한도 초과 응답만 따로 알린다.
+ *  5xx 는 모델 과부하라 잠깐 기다렸다 다음 모델로 다시 부른다(총 RETRY_DELAYS_MS.length + 1 회).
+ *  GEMINI_TIMEOUT_MS 를 넘겨 우리가 끊은 호출도 같은 갈래다 — 답을 못 받았으니 게이트웨이 시간 초과(504)와 다르지 않다.
+ *  끝까지 그것뿐이었으면 transient 가 true 다 — 모델이 일을 하나도 안 했으니 선차감을 되돌려도 된다.
+ *  그 밖의 네트워크 오류는 응답만 유실됐을 수 있어 되돌리지 않는다(선차감의 존재 이유다). */
 async function askGemini(
   apiKey: string,
   image: string,
   format: string,
   onQuotaExceeded: () => Promise<void>,
-): Promise<GeminiResult | null> {
-  const model = Deno.env.get("GEMINI_MODEL") || DEFAULT_MODEL;
+): Promise<{ result: GeminiResult | null; transient: boolean }> {
+  const chain = modelChain(Deno.env.get("GEMINI_MODEL"));
   const mimeType = format === "png" ? "image/png" : "image/jpeg";
-  try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-      {
-        method: "POST",
-        headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" },
-        body: JSON.stringify(buildRequest(image, mimeType)),
-      },
-    );
-    if (!res.ok) {
+  const body = JSON.stringify(buildRequest(image, mimeType));
+
+  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt - 1]));
+    const model = chain[attempt] ?? chain[chain.length - 1]; // 목록이 짧으면 마지막 모델을 다시 부른다
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+        {
+          method: "POST",
+          headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" },
+          body,
+          signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
+        },
+      );
+      if (res.ok) return { result: parseResponse(await res.json()), transient: false };
+      if (shouldRetry(res.status)) {
+        await res.body?.cancel(); // 읽지 않은 본문은 닫는다(Deno 리소스 누수 경고)
+        continue;
+      }
       if (isQuotaExceeded(res.status, await res.json().catch(() => null))) await onQuotaExceeded();
-      return null;
+      return { result: null, transient: false };
+    } catch (err) {
+      // 시간 초과로 우리가 끊은 것은 504 와 같이 본다: 다음 모델로 다시 부르고, 끝까지 그것뿐이면 transient 로 끝난다.
+      const name = (err as Error)?.name;
+      if (name === "TimeoutError" || name === "AbortError") continue;
+      return { result: null, transient: false };
     }
-    return parseResponse(await res.json());
-  } catch {
-    return null;
   }
+  return { result: null, transient: true };
 }
 
 Deno.serve(async (req) => {
@@ -147,6 +186,7 @@ Deno.serve(async (req) => {
       const res = await fetch(invokeUrl, {
         method: "POST",
         headers: { "X-OCR-SECRET": secret, "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(CLOVA_TIMEOUT_MS),
         body: JSON.stringify({
           version: "V2",
           requestId: crypto.randomUUID(),
@@ -167,7 +207,9 @@ Deno.serve(async (req) => {
         await exhaust(supabase, "clova");
       }
     } catch {
-      // 네트워크 오류도 1단계 실패로 본다
+      // 네트워크 오류도, CLOVA_TIMEOUT_MS 를 넘겨 우리가 끊은 것도 1단계 실패로 본다.
+      // 선차감은 되돌리지 않는다: CLOVA 는 Gemini 의 503 처럼 "아무 일도 안 했다"고 알려 준 적이 없고,
+      // 우리가 기다리다 끊었을 뿐이라 그쪽에서 이미 읽고 1건을 셌을 수 있다.
     }
   }
 
@@ -180,10 +222,13 @@ Deno.serve(async (req) => {
       geminiBlocked = true;
       return null;
     }
-    return askGemini(geminiKey, image, format, async () => {
+    const { result, transient } = await askGemini(geminiKey, image, format, async () => {
       geminiBlocked = true;
       await exhaust(supabase, "gemini");
     });
+    //    재시도와 모델 교체를 다 쓰고도 503 뿐이었으면 무료 한도를 쓴 것이 아니다. 선차감분을 돌려준다.
+    if (transient) await refund(supabase, "gemini");
+    return result;
   };
 
   const result = await resolve(clova, askGeminiOnce);

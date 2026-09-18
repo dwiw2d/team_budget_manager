@@ -1,8 +1,31 @@
 // Gemini 비전 모델로 영수증에서 네 필드를 뽑는 순수 모듈 (네트워크·Deno 의존성 없음).
 // 요청 본문 만들기와 응답 정규화만 담당한다. CLOVA 파서가 확신하지 못한 필드를 보완하는 2단계다.
 
-// gemini-2.5-flash 는 신규 사용자에게 막혀 404 가 난다. 기본값은 3.6 계열로 둔다.
+// 이 키로는 gemini-2.5-flash 도 쓸 수 있었다(docs/ocr/gemini.md §4-1 실측). 다만 신규 사용자에게는
+// 404 로 막힌다는 말이 있어(미확인 — 공식 근거를 찾지 못했다) 기본값은 3.6 계열로 둔다.
 export const DEFAULT_MODEL = "gemini-3.6-flash";
+
+// 첫 모델이 계속 막힐 때 갈아탈 순서. 3.6 이 과부하로 503 을 뱉는 동안 3.5 는 같은 사진을 읽어 냈고(실측),
+// flash-latest 는 구글이 그때그때 쓸 수 있는 flash 로 붙여 주므로 마지막 안전망으로 둔다.
+const FALLBACK_MODELS = ["gemini-3.5-flash", "gemini-flash-latest"];
+
+/** 시도할 모델 순서. GEMINI_MODEL 을 첫째로 두고 중복은 뺀다. 비어 있으면 DEFAULT_MODEL 이 첫째다. */
+export function modelChain(envModel?: string | null): string[] {
+  return [...new Set([envModel?.trim() || DEFAULT_MODEL, ...FALLBACK_MODELS])];
+}
+
+/** 5xx 는 모델이 일을 하나도 하지 않은 서버 쪽 일시 실패다. 다시 부르면 된다.
+ *  502·504 는 앞단 게이트웨이가 끊은 것이라 같은 갈래고, 우리가 시간 상한으로 끊은 호출도 여기에 맞춘다.
+ *  4xx 는 다시 불러도 소용없다. 429 는 한도 초과라 재시도 대상이 아니다(isQuotaExceeded 가 그 기간을 닫는다). */
+export function shouldRetry(status: number): boolean {
+  return status >= 500;
+}
+
+/** 재시도 사이 대기(ms). 길이만큼만 더 부른다 → 총 3회. Edge Function 에 실행 시간 제한이 있다. */
+export const RETRY_DELAYS_MS = [1000, 3000];
+
+/** 호출 하나의 시간 상한(ms). 25 × 3회 + 대기 4초 = 79초가 Gemini 몫이다(index.ts 머리말의 예산). */
+export const TIMEOUT_MS = 25_000;
 
 export interface GeminiResult {
   merchant: string | null;

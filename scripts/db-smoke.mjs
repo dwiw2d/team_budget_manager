@@ -13,6 +13,8 @@
 //   따라서 실제 저장소 요청은 끝내 나가지 않는다.
 // - (j)~(m) 은 OCR 무료 한도(ocr_limits/ocr_usage, 0005) 규칙이다. 한도는 사용자별이 아니라 프로젝트 전체이므로
 //   시작 상태를 ocr_usage 를 비워 고정한 뒤 센다. 이 삭제도 같은 트랜잭션이라 롤백된다.
+// - (o) 는 일시적 실패 환불(ocr_quota_refund, 0010) 규칙이다. 0010 이 아직 적용되지 않은 프로젝트도 있으므로
+//   함수가 없으면 건너뛰고 그 사실을 찍는다.
 process.loadEnvFile(".env.local");
 
 function need(key) {
@@ -186,6 +188,31 @@ begin
   results := results || jsonb_build_object('item', 'm', 'ok', ok,
     'detail', format('지난 기간 행만 남겼을 때 clova available=%s, gemini available=%s/used=%s, 최상위=%s (모두 true, used 0 기대)',
       quota->'clova'->>'available', quota->'gemini'->>'available', quota->'gemini'->>'used', quota->>'available'));
+
+  -- (o) ocr_quota_refund(): 선차감 1건을 되돌린다. 0 아래로는 내려가지 않는다(0010).
+  --     0010 이 아직 적용되지 않았으면 함수가 없으므로 건너뛴다.
+  if to_regprocedure('public.ocr_quota_refund(text)') is null then
+    results := results || jsonb_build_object('item', 'o', 'ok', true,
+      'detail', '0010 미적용(ocr_quota_refund 함수 없음) — 건너뜀');
+  else
+    delete from public.ocr_usage;
+    ok := public.ocr_quota_consume('gemini');
+    quota := public.ocr_quota();
+    ok := ok and (quota->'gemini'->>'used')::integer = 1;
+    detail := format('선차감 후 used=%s (기대 1)', quota->'gemini'->>'used');
+    perform public.ocr_quota_refund('gemini');
+    quota := public.ocr_quota();
+    ok := ok and (quota->'gemini'->>'used')::integer = 0
+      and (quota->'gemini'->>'available')::boolean;
+    detail := detail || format('; 되돌린 뒤 used=%s/available=%s (기대 0/true)',
+      quota->'gemini'->>'used', quota->'gemini'->>'available');
+    perform public.ocr_quota_refund('gemini');
+    quota := public.ocr_quota();
+    ok := ok and (quota->'gemini'->>'used')::integer = 0;
+    detail := detail || format('; 한 번 더 되돌려도 used=%s (기대 0, 음수로 내려가지 않는다)',
+      quota->'gemini'->>'used');
+    results := results || jsonb_build_object('item', 'o', 'ok', ok, 'detail', detail);
+  end if;
 
   -- (n) 결제를 지우면 after delete 트리거가 그 사진의 저장소 삭제 요청을 pg_net 큐에 넣는다.
   --     Vault 에 app_project_url·app_service_role_key 가 없으면 트리거는 조용히 지나간다.
