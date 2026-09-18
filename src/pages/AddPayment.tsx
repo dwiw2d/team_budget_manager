@@ -4,6 +4,7 @@ import { btnPrimary, btnSecondary, h1, input, label } from "../components/ui";
 import { autoCardId } from "../lib/cards";
 import { fromDatetimeLocal, toDatetimeLocal } from "../lib/dates";
 import { getOcrQuota, insertPayment, listCardBalances, uploadReceipt } from "../lib/db";
+import { userMessage } from "../lib/errors";
 import { resizeToBlob, STORAGE_MAX_EDGE, STORAGE_QUALITY } from "../lib/image";
 import { OcrError, recognizeReceipt } from "../lib/ocr";
 import type { CardBalance, PaymentSource } from "../lib/types";
@@ -81,7 +82,7 @@ export default function AddPayment() {
   useEffect(() => {
     listCardBalances()
       .then(setCards)
-      .catch((e) => setError((e as Error).message));
+      .catch((e) => setError(userMessage(e, "카드 목록을 불러오지 못했습니다")));
     // 읽기에 실패하면 막지 않는다. 그때는 인식 시도 중 429 를 받고 안내한다.
     getOcrQuota()
       .then((q) => setQuotaGone(!q.available))
@@ -179,7 +180,7 @@ export default function AddPayment() {
       photoRef.current = null;
       navigate("/");
     } catch (err) {
-      setError((err as Error).message);
+      setError(userMessage(err, "결제를 저장하지 못했습니다"));
       setBusy(false);
     }
   }

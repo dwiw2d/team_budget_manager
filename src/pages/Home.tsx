@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import PaymentRow from "../components/PaymentRow";
 import { h1, h2 } from "../components/ui";
 import { listCardBalances, listRecentPayments, purgeOldPayments, rollOverBalances } from "../lib/db";
+import { userMessage } from "../lib/errors";
 import { formatWon } from "../lib/money";
 import type { CardBalance, PaymentWithCard } from "../lib/types";
 
@@ -20,7 +21,7 @@ export default function Home() {
         setCards(c);
         setRecent(r);
       } catch (e) {
-        setError((e as Error).message);
+        setError(userMessage(e, "불러오지 못했습니다"));
       }
     })();
   }, []);
