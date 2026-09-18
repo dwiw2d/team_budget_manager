@@ -28,7 +28,8 @@ const FIELDS = ['merchant', 'paidAt', 'amount', 'cardNumber'];
 // 파서 탓인지 정답표 탓인지 구분할 수 없다. 기본값은 안 움직이는 사본이어야 한다.
 const CANDIDATES = [
   process.env.RECEIPT_CATALOG && { path: process.env.RECEIPT_CATALOG, kind: 'RECEIPT_CATALOG 환경 변수' },
-  { path: join(DIR, 'frozen', 'catalog-v1.json'), kind: '동결본' },
+  { path: join(DIR, 'frozen', 'catalog-v2.json'), kind: '동결본 v2(정답표 감사 반영)' },
+  { path: join(DIR, 'frozen', 'catalog-v1.json'), kind: '동결본 v1(옛 숫자 재현용)' },
   { path: join(DIR, 'catalog.json'), kind: '살아 있는 카탈로그(수집 중 바뀔 수 있다)' },
 ].filter(Boolean);
 
