@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { extract, linesFromFields } from "./clova-general.ts";
-import { receipt1Fields, receipt2Fields } from "./clova-general.fixtures.ts";
+import { receipt1Fields, receipt2Fields, receipt3Fields } from "./clova-general.fixtures.ts";
 
 describe("extract", () => {
   it("receipt-1: KIS VAN 승인전표에서 네 필드를 뽑는다", () => {
@@ -21,6 +21,21 @@ describe("extract", () => {
       cardNumber: "42658698********",
       weak: [],
     });
+  });
+
+  it("receipt-3: 라벨 없는 사업자번호 줄 위에서 상호를 뽑는다", () => {
+    expect(extract(receipt3Fields)).toEqual({
+      merchant: "맷돌로만(가산디지털점)",
+      paidAt: "2026-09-18T11:57:00+09:00",
+      amount: 21000,
+      cardNumber: "4265-8699-****-****",
+      weak: [],
+    });
+  });
+
+  it("가맹점 함정: 사업자번호 줄 오른쪽 끝의 대표자 이름을 상호로 고르지 않는다", () => {
+    // "321-98-76543 TEL)021112222 박민수" 줄이다. 규칙 (b) 를 (c) 보다 먼저 보면 여기서 이름을 집는다.
+    expect(extract(receipt3Fields).merchant).not.toBe("박민수");
   });
 
   it("금액 함정: 공급가/부가세/단가/품목합계를 총액으로 고르지 않는다", () => {
