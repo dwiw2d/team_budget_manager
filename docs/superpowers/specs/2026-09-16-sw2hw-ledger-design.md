@@ -171,7 +171,7 @@ return 삭제 건수;
 5. **카드 `/cards`**: 카드 목록(이름, 카드번호 앞자리, 예산, 잔액). 목록 위에는 "카드 추가" 버튼 하나만 둔다. 카드 추가/수정 모달(이름, 예산, 카드번호 앞자리 선택): 예산 입력 아래에 "예산을 바꾸면 다음 달 1일부터 적용됩니다" 를 작은 글씨로 우측 정렬해 둔다. 앞자리 입력의 라벨은 "카드번호 앞 6~8자리(선택)"이고 그 아래에 "영수증은 뒤 4자리를 가리므로 앞자리로 맞춥니다" 한 줄을 둔다. 숫자 6~8자리가 아니면 저장하지 않는다. 카드 상세 시트: 이름·카드번호 앞자리·예산·잔액을 보여주고 예산 아래에 같은 안내 한 줄을 우측 정렬해 둔다. 버튼은 "수정"·"삭제" 둘뿐이다(`grid-cols-2`). **초기화 버튼은 카드별도 전체도 없다** — 잔액은 매월 1일 0시에 저절로 채워진다. 삭제는 확인창 후 실행하고 FK 오류면 안내.
 6. **설정 `/settings`**: PIN 변경(현재 PIN·새 PIN·새 PIN 확인 3개 입력. 현재 PIN 은 `signInWithPassword`로 확인한 뒤 `auth.updateUser`로 변경), 로그아웃, 앱 버전 표시.
 
-PWA: manifest `name`/`short_name` "SW2HW 장부", `display: standalone`, `lang: ko`, `theme_color`, 아이콘 192·512 PNG(+ SVG 원본, 글자 "S"). 서비스워커는 vite-plugin-pwa `generateSW`, `registerType: 'autoUpdate'`, 앱 셸만 프리캐시하고 Supabase 요청은 캐시하지 않는다. 새 서비스워커가 자리를 잡아도 열려 있는 화면은 옛 JS 를 쓰므로, `useRegisterSW({ onNeedReload })`(자동 새로고침 대신 우리가 알린다)로 오프라인 막대 옆에 "새 버전이 있습니다. 새로고침" 한 줄을 띄운다.
+PWA: manifest `name`/`short_name` "SW2HW 장부", `display: standalone`, `lang: ko`, `theme_color`, 아이콘 192·512 PNG(+ SVG 원본, 글자 "S"). 서비스워커는 vite-plugin-pwa `generateSW`, `registerType: 'prompt'`, 앱 셸만 프리캐시하고 Supabase 요청은 캐시하지 않는다. 입력 중인 화면이 말없이 새로고침되지 않게 자동 적용 대신 `useRegisterSW()` 의 `needRefresh` 로 오프라인 막대 옆에 "새 버전이 있습니다. 새로고침" 한 줄을 띄우고, 누르면 `updateServiceWorker(true)` 가 갈아끼운다.
 
 ## 7. 인증·보안
 
@@ -179,7 +179,7 @@ PWA: manifest `name`/`short_name` "SW2HW 장부", `display: standalone`, `lang: 
 - 공개 가입 차단: `supabase/config.toml` `[auth] enable_signup = false` + 클라우드에는 `scripts/disable-signup.mjs`(Management API `PATCH /v1/projects/{ref}/config/auth` `{ "disable_signup": true }`, PAT 사용). 차단 확인은 anon 키로 `signUp` 시도 → 오류.
 - PIN 복구(앱 밖): README에 SQL 편집기용 `update auth.users set encrypted_password = crypt('새비밀번호', gen_salt('bf')) where email = 'owner@sw2hw.local';` 를 적는다.
 - 브라우저에는 anon 키만 있다. 데이터 보호는 RLS, 삭제·수정 금지는 정책과 트리거가 맡는다. UI 제한은 보조일 뿐이다.
-- CSP: 배포처인 GitHub Pages 가 HTTP 헤더를 넣을 수 없어 `index.html` 의 `<meta http-equiv="Content-Security-Policy">` 로 둔다(`script-src 'self'`, `style-src 'self' 'unsafe-inline'`, `img-src`·`connect-src` 는 `'self'` + Supabase 출처. 출처는 Vite 가 `%VITE_SUPABASE_URL%` 을 빌드 때 치환한다). `frame-ancestors` 는 meta 로는 무시되므로 `nginx.conf` 쪽에만 둔다 — 자체 호스팅 경로는 같은 정책을 진짜 헤더로 내보내고 `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`(`camera=(self)`), `X-Frame-Options: DENY` 를 더한다(nginx 는 하위 블록에 `add_header` 가 있으면 상위를 물려주지 않으므로 두 `location` 에 모두 적는다).
+- CSP: 배포처인 GitHub Pages 가 HTTP 헤더를 넣을 수 없어 `index.html` 의 `<meta http-equiv="Content-Security-Policy">` 로 둔다(`script-src 'self'`, `style-src 'self' 'unsafe-inline'`, `img-src`·`connect-src` 는 `'self'` + Supabase 출처. 출처는 Vite 가 `%VITE_SUPABASE_URL%` 을 빌드 때 치환한다). `Referrer-Policy` 는 meta 로 온전히 대체되므로 `<meta name="referrer">` 도 함께 둔다. `frame-ancestors` 는 meta 로는 무시되므로 `nginx.conf` 쪽에만 둔다 — 자체 호스팅 경로는 같은 정책을 진짜 헤더로 내보내고 `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`(`camera=(self)`), `X-Frame-Options: DENY` 를 더한다(nginx 는 하위 블록에 `add_header` 가 있으면 상위를 물려주지 않으므로 두 `location` 에 모두 적는다).
 - 오류 문구: Supabase/Postgres 원본 메시지(RLS 정책 이름·테이블명·제약조건 원문)를 화면에 그대로 내보내지 않는다. 화면은 `src/lib/errors.ts` 의 `userMessage(e, fallback)` 로 고정 한국어 문구를 쓴다(오프라인이면 네트워크 안내, `code`·`status` 가 없는 Error 는 `db.ts` 가 직접 만든 안내 문구라 그대로 통과).
 
 ## 8. 배포·운영

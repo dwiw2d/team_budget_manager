@@ -82,10 +82,12 @@ export default function App() {
   // undefined = 세션 확인 전(INITIAL_SESSION 대기)
   const [session, setSession] = useState<Session | null>();
   const online = useOnline();
-  // registerType 이 autoUpdate 라 새 서비스 워커는 곧바로 자리를 잡지만 열려 있는 화면은 옛 JS 를 계속 쓴다.
-  // onNeedReload 를 주면 플러그인이 말없이 새로고침하는 대신 아래 막대를 띄운다.
-  const [needReload, setNeedReload] = useState(false);
-  useRegisterSW({ onNeedReload: () => setNeedReload(true) });
+  // 새 서비스 워커가 대기하면(registerType: prompt) 막대를 띄운다. 자동으로 갈아치우지 않는 것은
+  // 입력 중인 화면이 말없이 새로고침되지 않게 하려는 것이다.
+  const {
+    needRefresh: [needRefresh],
+    updateServiceWorker,
+  } = useRegisterSW();
 
   useEffect(() => {
     const {
@@ -103,13 +105,13 @@ export default function App() {
           네트워크 연결을 확인하세요
         </div>
       )}
-      {needReload && (
+      {needRefresh && (
         <div className="sticky top-0 z-10 flex items-center justify-center gap-2 bg-slate-900 px-4 pb-2 pt-[calc(env(safe-area-inset-top)+0.5rem)] text-sm text-white">
           새 버전이 있습니다.
           <button
             type="button"
             className="min-h-11 px-2 font-bold underline"
-            onClick={() => window.location.reload()}
+            onClick={() => updateServiceWorker(true)}
           >
             새로고침
           </button>
