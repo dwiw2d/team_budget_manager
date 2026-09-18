@@ -1,0 +1,11 @@
+# 태그 고정(@v7 등)은 태그가 가리키는 커밋이 바뀌어도 알 수 없다. SHA 고정 대신 Dependabot 이 PR 로 알리게 한다.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

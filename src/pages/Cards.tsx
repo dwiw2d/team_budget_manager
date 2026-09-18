@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { btnDanger, btnPrimary, btnSecondary, btnText, h1, input, label } from "../components/ui";
 import { deleteCard, insertCard, listCardBalances, updateCard } from "../lib/db";
+import { userMessage } from "../lib/errors";
 import { formatWon } from "../lib/money";
 import type { CardBalance } from "../lib/types";
 
@@ -32,7 +33,7 @@ export default function Cards() {
   const load = () =>
     listCardBalances()
       .then(setCards)
-      .catch((e) => setError((e as Error).message));
+      .catch((e) => setError(userMessage(e, "카드 목록을 불러오지 못했습니다")));
 
   useEffect(() => {
     load();
@@ -47,7 +48,7 @@ export default function Cards() {
       await load();
       return true;
     } catch (e) {
-      setError((e as Error).message);
+      setError(userMessage(e, "카드를 저장하지 못했습니다"));
       return false;
     } finally {
       setBusy(false);
