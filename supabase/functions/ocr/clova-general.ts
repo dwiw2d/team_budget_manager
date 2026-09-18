@@ -74,12 +74,17 @@ const MERCHANT_BAD = new RegExp([
   // 여기 두면 멀쩡한 상호를 버린다. 아래 MERCHANT_ROLE 에서 따로 본다.
   '대표자',
   'VANKEY', '일시', '시간', 'POS', '승인', '매출', '영수증', '전표', '고객용', '회원용', '알림',
+  // 배달앱 주문내역 화면. 상호 자리에 UI 버튼과 안내 문구가 올라온다.
+  '가게보기', '지도보기', '주문내역', '완료',
 ].join('|'), 'i');
 // 사업자등록번호 모양. 라벨 없이 번호만 찍는 영수증이 많다.
 const BIZNO = /\b\d{3}-\d{2}-\d{5}\b/;
 // 번호 모양이 아니어도 라벨만으로 자리를 알 수 있다("사업자등록번호:7436000775").
 const BIZNO_LABEL = /사업자(등록)?번호/;
-const ADDRESS = /^(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)/;
+// 시/도 이름으로 '시작'하는 주소. 이름 뒤에 행정 접미사나 공백이 와야 주소로 본다 —
+// 그냥 접두어로만 보면 '서울법인115'·'강원대학교병원'·'제주도횟집' 같은 진짜 상호를 버린다.
+const ADDRESS =
+  /^(?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)(?:특별자치시|특별자치도|특별시|광역시|시|도)?(?=\s|$|\d)/;
 // ADDRESS 는 시/도 이름으로 '시작'하는 주소만 거른다. "성남시 분당구 황새울로" 처럼 시/도가 빠진
 // 주소도 상호 자리에 올라오므로 하나 더 본다. 단 '…동/…로/…길' 로 끝나는 토막은 세지 않는다 —
 // 한국 상호는 동네 이름으로 끝나는 일이 흔하고('정성스시 방배동'), 무엇보다 '시' 가 '스시' 를 잡는다.
@@ -93,6 +98,8 @@ const looksAddress = (v: string): boolean => ADDRESS.test(v) || ADDRESS_FULL.tes
 // 한글에는 \b 가 없어 부분 문자열로 걸면 '대표과일'·'계산원조갈비'까지 버린다. 그래서
 // (1) 역할어 앞이 줄머리나 공백이고 (2) 뒤에 공백이나 콜론으로 떨어진 사람 이름이 올 때만 건다.
 const MERCHANT_ROLE = /(^|\s)(대표|사장|점장|담당|계산원)(\s*[:：]\s*|\s+)[가-힣]{2,5}(\s|$)/;
+// 칸이 갈라져 역할어만 남은 것. 이름은 오른쪽 칸에 있어 MERCHANT_ROLE 이 못 본다.
+const ROLE_ONLY = /^(?:대표|사장|점장|담당|계산원)[:：]?$/;
 
 const squash = (s: string): string => s.replace(/\s+/g, '');
 // "대 표 자 명" 처럼 한 글자씩 벌려 찍은 자간 공백을 도로 붙인다. 안 붙이면 MERCHANT_BAD 의
@@ -313,12 +320,23 @@ function cleanMerchant(seg: string, dropNumbers: boolean): string {
 export function merchantFromLine(line: Line): string | null {
   // 줄 통째로도 상호로 쓸 만하면 그대로 쓴다. 넓게 띄어 쓴 상호("롯데쇼핑(주)      잠실 점")를
   // 토막으로 갈라 앞부분만 집는 것을 막는다.
-  if (merchantOk(line.text)) return line.text.trim();
-
+  // 도장·기호처럼 한 글자만 찍힌 칸은 빼고 본다(영수증 오른쪽 끝의 '송').
   const segs = segments(line);
+  const whole = segs.filter((x) => squash(x).length > 1).join(' ');
+  if (whole && merchantOk(whole)) return whole.trim();
+
   const korean = segs.some(hasHangul);
-  for (const seg of segs) {
+  for (let i = 0; i < segs.length; i += 1) {
+    const seg = segs[i];
     if (korean && !hasHangul(seg)) continue;
+    // 토막 하나가 통째로 라벨이나 역할어면 상호가 아니다("대표     김유나" 의 왼쪽 칸).
+    // 게다가 그 오른쪽 칸은 그 라벨의 값이다 — 사람 이름·주소·번호지 상호가 아니다.
+    const sq = squash(seg);
+    if (MERCHANT_LABEL.test(sq)) continue;
+    if (NEXT_LABEL.test(sq) || ROLE_ONLY.test(sq)) {
+      i += 1;
+      continue;
+    }
     const v = cleanMerchant(seg, segs.length > 1);
     if (v && merchantOk(v)) return v.trim();
   }
@@ -373,12 +391,17 @@ function labelEnd(words: string[], i: number, re: RegExp): number {
   return end;
 }
 
-/** 상호로 쓸 만한 글자인지. 아니면 비워 두는 편이 낫다. (테스트에서 직접 부른다) */
-export function merchantOk(text: string): boolean {
+/**
+ * 상호로 쓸 만한 글자인지. 아니면 비워 두는 편이 낫다. (테스트에서 직접 부른다)
+ * labelled=true 는 "상호:" 같은 라벨이 직접 가리킨 값이라는 뜻이다. 자리가 확실하니
+ * 숫자 세 자리 규칙을 면제한다 — '서울법인115'·'153구포국수(선릉역점)' 같은 진짜 상호가 있다.
+ */
+export function merchantOk(text: string, labelled = false): boolean {
   const v = text.trim();
-  if (v.length < 2 || v.length > 20) return false;
+  // 상한은 실제로 본 가장 긴 상호('(유)아웃백스테이크하우스코리아 신대방점' 21자)보다 넉넉히 둔다.
+  if (v.length < 2 || v.length > 25) return false;
   if (/[[\]]/.test(v)) return false; // "[고객용]" 같은 말머리
-  if (/\d{3}/.test(v)) return false; // 번호·금액이 섞인 줄
+  if (!labelled && /\d{3}/.test(v)) return false; // 번호·금액이 섞인 줄
   if ((v.match(/[가-힣A-Za-z]/g) ?? []).length < 2) return false;
   // 자간 공백을 붙인 꼴로도 한 번 더 본다.
   return [v, deKern(v)].every((x) => !looksAddress(x) && !MERCHANT_BAD.test(x) && !MERCHANT_ROLE.test(x));
@@ -416,7 +439,7 @@ function labelledMerchant(line: Line): string | null {
       take.push(words[j]);
     }
     const value = take.join(' ').trim();
-    if (value && merchantOk(value)) return value;
+    if (value && merchantOk(value, true)) return value;
   }
   return null;
 }
@@ -475,11 +498,12 @@ function findMerchant(lines: Line[]): { value: string | null; sure: boolean } {
   }
 
   // (d) 라벨도 사업자번호도 없는 간이 영수증(배달앱 화면, 모바일 영수증). 맨 위 몇 줄에서 찾는다.
+  //     한글이 든 후보를 먼저 쓴다 — 맨 윗줄은 'PARIS BAGUETTE' 같은 영문 로고인 일이 잦고
+  //     한글 상호는 그 아래 줄에 따로 찍힌다. 줄 안에서 로고 토막을 버리는 규칙과 같은 뜻이다.
   //     확신은 못 하지만 비워 두는 것보다 낫다 — 2단계 Gemini 가 교차 확인하고 화면에도 표시된다.
-  for (const l of lines.slice(0, 4)) {
-    const v = merchantFromLine(l);
-    if (v) return { value: v, sure: false };
-  }
+  const top = lines.slice(0, 4).map(merchantFromLine).filter((v): v is string => v !== null);
+  const pick = top.find(hasHangul) ?? top[0];
+  if (pick) return { value: pick, sure: false };
 
   return { value: null, sure: false }; // 확신이 없으면 비워 둔다. Gemini 나 사용자가 채운다.
 }

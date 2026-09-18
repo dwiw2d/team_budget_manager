@@ -383,3 +383,69 @@ describe("상호 앵커 넓히기: 사업자번호가 같은 줄·먼 줄이거�
     expect(extract(fields).weak).toContain("merchant");
   });
 });
+
+describe("merchantOk 문턱: 앞 단계를 다 고친 뒤에 푼 것들", () => {
+  it("라벨이 직접 가리킨 값은 숫자 세 자리 규칙을 면제한다", () => {
+    expect(merchantOk("서울법인115")).toBe(false); // 자리만 보고 고른 값이면 여전히 버린다
+    expect(merchantOk("서울법인115", true)).toBe(true);
+    expect(extract(linesToFields(["상  호 : 서울법인115"])).merchant).toBe("서울법인115");
+    expect(extract(linesToFields(["상호:153구포국수(선릉역점)"])).merchant).toBe("153구포국수(선릉역점)");
+  });
+
+  it("라벨이 가리켜도 글자가 두 자 미만이면 상호로 받지 않는다", () => {
+    expect(merchantOk("1234567", true)).toBe(false);
+    expect(merchantOk("101-86-76277", true)).toBe(false);
+  });
+
+  it("20자가 넘는 긴 상호를 버리지 않는다", () => {
+    expect(merchantOk("(유)아웃백스테이크하우스코리아 신대방점")).toBe(true);
+  });
+
+  it("배달앱 화면의 UI 버튼을 상호로 고르지 않는다", () => {
+    expect(merchantOk("가게보기")).toBe(false);
+    expect(merchantOk("지도보기")).toBe(false);
+    const fields = linesToFields([
+      "픽업을 완료했어요",
+      "이삭토스트                지도보기",
+      "영수증 받기   전화   가게보기",
+    ]);
+    expect(extract(fields).merchant).toBe("이삭토스트");
+  });
+
+  it("시/도 이름으로 시작해도 뒤에 행정 접미사나 공백이 없으면 주소가 아니다", () => {
+    expect(merchantOk("강원대학교병원")).toBe(true);
+    expect(merchantOk("제주도횟집")).toBe(true);
+    expect(merchantOk("경기김밥")).toBe(true);
+    // 진짜 주소는 그대로 걸린다
+    expect(merchantOk("서울 강동구 선호대로")).toBe(false);
+    expect(merchantOk("강원도 춘천시 백령로")).toBe(false);
+    expect(merchantOk("서울특별시 송파구 올림픽로")).toBe(false);
+  });
+
+  it("역할어 칸의 오른쪽 칸은 사람 이름이므로 상호로 고르지 않는다", () => {
+    const fields = linesToFields([
+      "뉴매장",
+      "57,000원",
+      "대표                            김유나",
+      "사업자등록번호   331-88-02462",
+    ]);
+    expect(extract(fields).merchant).toBe("뉴매장");
+  });
+
+  it("도장처럼 한 글자만 찍힌 칸은 상호에서 뺀다", () => {
+    const fields = linesToFields([
+      "현 대 백 화 점  무 역 센 터 점        송",
+      "158-86-00318                           송",
+    ]);
+    expect(extract(fields).merchant).toBe("현 대 백 화 점 무 역 센 터 점");
+  });
+
+  it("맨 위 줄이 영문 로고면 그 아래 한글 상호를 먼저 쓴다", () => {
+    const fields = linesToFields([
+      "PARIS BAGUETTE",
+      "주문(대기)번호 - 0127",
+      "여의도KBS 파리바게트",
+    ]);
+    expect(extract(fields).merchant).toBe("여의도KBS 파리바게트");
+  });
+});
