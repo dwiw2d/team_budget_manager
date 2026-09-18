@@ -75,6 +75,40 @@ https://ai.google.dev/gemini-api/docs/pricing (100만 토큰당)
   → 1,000장에 약 $0.9
 - `gemini-2.5-flash-lite`: ≈ **$0.00027 / 장** (약 0.4원) → 1,000장에 약 $0.27
 
+### 실측 토큰 (영수증 1장, `gemini-3.5-flash`, 2026-09-18)
+
+`usageMetadata` 에서 그대로 읽은 값이다. 위 추정치와 달리 **프롬프트는 54 토큰**밖에 안 되고
+(한국어 프롬프트가 800 토큰이라는 추정은 과했다) 대신 **사고(thoughts) 토큰이 813** 으로 가장 크다.
+
+| 항목 | 토큰 |
+| --- | --- |
+| 이미지 | 1,100 |
+| 프롬프트(텍스트) | 54 |
+| 출력 | 77 |
+| 사고(thoughts) | 813 |
+| **합계** | **2,044** |
+
+## 4-1. 503 은 흔하다 — 재시도와 모델 교체
+
+무료 등급에서 HTTP 503 `UNAVAILABLE`("This model is currently experiencing high demand") 이 자주 온다.
+같은 영수증 이미지로 실측한 것(2026-09-18):
+
+| 모델 | 시도 | 결과 | 걸린 시간 |
+| --- | --- | --- | --- |
+| `gemini-3.6-flash` | 1 | 503 UNAVAILABLE | 9.7초 |
+| `gemini-3.6-flash` | 2 | 503 UNAVAILABLE | 32.0초 |
+| `gemini-3.5-flash` | 1 | 503 UNAVAILABLE | 4.8초 |
+| `gemini-3.5-flash` | 2 | **200 — 네 필드 정확히 인식** | 13.5초 |
+
+즉 **다시 부르면 되고, 한 모델이 계속 막히면 다른 모델은 통한다.** Edge Function 은 503·500 을
+일시적 실패로 보고 최대 2회 더 부르며(대기 1초 → 3초) 시도마다 모델을 갈아탄다
+(`GEMINI_MODEL` → `gemini-3.5-flash` → `gemini-flash-latest`). 이 판단은 `supabase/functions/ocr/gemini.ts`
+의 순수 함수 `shouldRetry(status)`·`modelChain(envModel)` 에 있다. 이 키로 쓸 수 있는 모델은
+`gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-flash-latest`, `gemini-2.5-flash` 로 확인됐다.
+
+503 으로만 끝나면 모델이 일을 하나도 하지 않은 것이므로 선차감한 무료 한도 1건을
+`ocr_quota_refund` 로 되돌린다(`0010_ocr_quota_refund.sql`). 429 는 진짜로 쓴 것이라 되돌리지 않는다.
+
 ## 5. 무료 등급의 데이터 정책 — 영수증에는 개인정보가 들어 있다
 
 https://ai.google.dev/gemini-api/terms 의 "How Google Uses Your Data":

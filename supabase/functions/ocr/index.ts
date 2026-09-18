@@ -4,11 +4,19 @@
 //        GEMINI_API_KEY 가 있으면 Gemini 를 부른다. 부를지 말지는 merge.ts 의 resolve 가 정한다.
 // 두 제공자 모두 남은 무료 한도를 물어볼 수 있는 API 가 없으므로 우리가 직접 센다(0005 마이그레이션).
 //   부르기 직전에 ocr_quota_consume 으로 1건을 선차감하고, 제공자가 한도 초과를 알려 오면 ocr_quota_exhaust 로 기간을 닫는다.
+//   모델이 일을 하나도 하지 않은 실패(Gemini 503)로 끝나면 ocr_quota_refund 로 선차감분을 되돌린다(0010 마이그레이션).
 // config.toml 의 [functions.ocr] verify_jwt = false 이므로 JWT 는 여기서 직접 검증한다.
 // 이 파일은 Deno 전용이라 tsconfig 의 typecheck 대상에서 제외되어 있다(exclude).
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { extract, type OcrField } from "./clova-general.ts";
-import { buildRequest, DEFAULT_MODEL, parseResponse, type GeminiResult } from "./gemini.ts";
+import {
+  buildRequest,
+  type GeminiResult,
+  modelChain,
+  parseResponse,
+  RETRY_DELAYS_MS,
+  shouldRetry,
+} from "./gemini.ts";
 import { type ClovaOutcome, merge, resolve } from "./merge.ts";
 import { decideProviders, isQuotaExceeded, type OcrQuota } from "./quota.ts";
 import { receipt1Fields } from "./clova-general.fixtures.ts";
@@ -49,32 +57,49 @@ async function exhaust(db: Db, provider: string): Promise<void> {
   await db.rpc("ocr_quota_exhaust", { p_provider: provider });
 }
 
-/** 2단계. 실패는 오류로 만들지 않는다(보조일 뿐이다). 한도 초과 응답만 따로 알린다. */
+/** 선차감을 되돌린다. 모델이 일을 하나도 하지 않은 실패(503 등)에만 쓴다(0010 마이그레이션). */
+async function refund(db: Db, provider: string): Promise<void> {
+  await db.rpc("ocr_quota_refund", { p_provider: provider });
+}
+
+/** 2단계. 실패는 오류로 만들지 않는다(보조일 뿐이다). 한도 초과 응답만 따로 알린다.
+ *  503·500 은 모델 과부하라 잠깐 기다렸다 다음 모델로 다시 부른다(총 RETRY_DELAYS_MS.length + 1 회).
+ *  끝까지 그것뿐이었으면 transient 가 true 다 — 모델이 일을 하나도 안 했으니 선차감을 되돌려도 된다.
+ *  네트워크 오류는 응답만 유실됐을 수 있어 되돌리지 않는다(선차감의 존재 이유다). */
 async function askGemini(
   apiKey: string,
   image: string,
   format: string,
   onQuotaExceeded: () => Promise<void>,
-): Promise<GeminiResult | null> {
-  const model = Deno.env.get("GEMINI_MODEL") || DEFAULT_MODEL;
+): Promise<{ result: GeminiResult | null; transient: boolean }> {
+  const chain = modelChain(Deno.env.get("GEMINI_MODEL"));
   const mimeType = format === "png" ? "image/png" : "image/jpeg";
-  try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-      {
-        method: "POST",
-        headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" },
-        body: JSON.stringify(buildRequest(image, mimeType)),
-      },
-    );
-    if (!res.ok) {
+  const body = JSON.stringify(buildRequest(image, mimeType));
+
+  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt - 1]));
+    const model = chain[attempt] ?? chain[chain.length - 1]; // 목록이 짧으면 마지막 모델을 다시 부른다
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+        {
+          method: "POST",
+          headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" },
+          body,
+        },
+      );
+      if (res.ok) return { result: parseResponse(await res.json()), transient: false };
+      if (shouldRetry(res.status)) {
+        await res.body?.cancel(); // 읽지 않은 본문은 닫는다(Deno 리소스 누수 경고)
+        continue;
+      }
       if (isQuotaExceeded(res.status, await res.json().catch(() => null))) await onQuotaExceeded();
-      return null;
+      return { result: null, transient: false };
+    } catch {
+      return { result: null, transient: false };
     }
-    return parseResponse(await res.json());
-  } catch {
-    return null;
   }
+  return { result: null, transient: true };
 }
 
 Deno.serve(async (req) => {
@@ -166,10 +191,13 @@ Deno.serve(async (req) => {
       geminiBlocked = true;
       return null;
     }
-    return askGemini(geminiKey, image, format, async () => {
+    const { result, transient } = await askGemini(geminiKey, image, format, async () => {
       geminiBlocked = true;
       await exhaust(supabase, "gemini");
     });
+    //    재시도와 모델 교체를 다 쓰고도 503 뿐이었으면 무료 한도를 쓴 것이 아니다. 선차감분을 돌려준다.
+    if (transient) await refund(supabase, "gemini");
+    return result;
   };
 
   const result = await resolve(clova, askGeminiOnce);

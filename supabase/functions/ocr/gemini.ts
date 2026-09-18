@@ -4,6 +4,24 @@
 // gemini-2.5-flash 는 신규 사용자에게 막혀 404 가 난다. 기본값은 3.6 계열로 둔다.
 export const DEFAULT_MODEL = "gemini-3.6-flash";
 
+// 첫 모델이 계속 막힐 때 갈아탈 순서. 3.6 이 과부하로 503 을 뱉는 동안 3.5 는 같은 사진을 읽어 냈고(실측),
+// flash-latest 는 구글이 그때그때 쓸 수 있는 flash 로 붙여 주므로 마지막 안전망으로 둔다.
+const FALLBACK_MODELS = ["gemini-3.5-flash", "gemini-flash-latest"];
+
+/** 시도할 모델 순서. GEMINI_MODEL 을 첫째로 두고 중복은 뺀다. 비어 있으면 DEFAULT_MODEL 이 첫째다. */
+export function modelChain(envModel?: string | null): string[] {
+  return [...new Set([envModel?.trim() || DEFAULT_MODEL, ...FALLBACK_MODELS])];
+}
+
+/** 이 상태 코드는 모델이 일을 하나도 하지 않은 일시적 과부하다. 다시 부르면 된다.
+ *  429 는 한도 초과라 재시도 대상이 아니다(isQuotaExceeded 가 그 기간을 닫는다). */
+export function shouldRetry(status: number): boolean {
+  return status === 503 || status === 500;
+}
+
+/** 재시도 사이 대기(ms). 길이만큼만 더 부른다 → 총 3회. Edge Function 에 실행 시간 제한이 있다. */
+export const RETRY_DELAYS_MS = [1000, 3000];
+
 export interface GeminiResult {
   merchant: string | null;
   /** "YYYY-MM-DDTHH:mm:ss+09:00" */
