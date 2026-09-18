@@ -71,6 +71,8 @@ const MERCHANT_BAD = new RegExp([
   '사업자', '대표자', 'TEL', '전화', '주소', '합계', '부가세', '공급가', '카드', '할부', 'TID',
   'VANKEY', '일시', '시간', 'POS', '승인', '매출', '영수증', '전표', '고객용', '회원용', '알림',
 ].join('|'), 'i');
+// 사업자등록번호 모양. 라벨 없이 번호만 찍는 영수증이 많다.
+const BIZNO = /\b\d{3}-\d{2}-\d{5}\b/;
 const ADDRESS = /^(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)/;
 
 const squash = (s: string): string => s.replace(/\s+/g, '');
@@ -244,6 +246,13 @@ function findMerchant(lines: Line[]): string | null {
     if (m && merchantOk(m[1])) return m[1].trim();
   }
 
+  // (c) 사업자번호 줄 바로 위 줄. POS 영수증은 제목 / 상호 / 사업자번호 순서로 찍힌다.
+  //     (b) 보다 먼저 본다 — 상호가 제 줄에 따로 있는데도 사업자번호 줄 오른쪽 끝의
+  //     대표자 이름을 집어가는 일이 있다("321-98-76543 TEL)... 박민수").
+  //     라벨 없이 번호만 찍는 영수증이 있어 '사업자번호' 글자와 번호 모양을 둘 다 본다.
+  const i = lines.findIndex((l) => squash(l.text).includes('사업자번호') || BIZNO.test(l.text));
+  if (i > 0 && merchantOk(lines[i - 1].text)) return lines[i - 1].text.trim();
+
   // (b) 대표자/TEL 이 있는 줄의 오른쪽 끝 토막. 위쪽이 VAN 안내 문구로 덮인 카드 승인전표는
   //     상호가 "홍길동 (TEL:...)        동남집" 처럼 여기에만 찍힌다.
   //     가로로 확 떨어져 있어야(빈칸 두 글자 이상) 오른쪽 단으로 본다.
@@ -255,10 +264,6 @@ function findMerchant(lines: Line[]): string | null {
     if (last.text === l.text.match(/대표자\s*[:：]?\s*(\S+)/)?.[1]) continue; // 대표자 이름은 상호가 아니다
     if (merchantOk(last.text)) return last.text.trim();
   }
-
-  // (c) 사업자번호 줄 바로 위 줄. POS 영수증은 제목 / 상호 / 사업자번호 순서로 찍힌다.
-  const i = lines.findIndex((l) => squash(l.text).includes('사업자번호'));
-  if (i > 0 && merchantOk(lines[i - 1].text)) return lines[i - 1].text.trim();
 
   return null; // 확신이 없으면 비워 둔다. Gemini 나 사용자가 채운다.
 }

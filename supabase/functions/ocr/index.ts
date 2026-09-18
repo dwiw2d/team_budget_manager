@@ -15,7 +15,9 @@ import { receipt1Fields } from "./clova-general.fixtures.ts";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, apikey, content-type",
+  // supabase-js 가 X-Client-Info 를 항상 보낸다. 빠지면 브라우저가 프리플라이트에서 막아
+  // POST 자체가 나가지 않는다. x-region 은 functions.invoke 의 region 옵션을 쓸 때 붙는다.
+  "Access-Control-Allow-Headers": "authorization, apikey, content-type, x-client-info, x-region",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 const MAX_IMAGE_BASE64 = 5 * 1024 * 1024; // 5MB (base64 문자열 기준)
