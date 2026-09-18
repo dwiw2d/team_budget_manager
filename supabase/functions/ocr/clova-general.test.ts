@@ -261,6 +261,11 @@ describe("금액 좌우 2단: 라벨 칸과 그 오른쪽 칸까지만 본다", 
     expect(extract(fields).amount).toBe(8000);
   });
 
+  it("수량 칸을 낀 '합계수량/금액' 은 품목 소계라 결제액에 진다", () => {
+    const fields = linesToFields(["합계수량/금액      3      4,700", "해피포인트할인      -700", "합    계      3,680"]);
+    expect(extract(fields).amount).toBe(3680);
+  });
+
   it("자릿수 칸에 한 자씩 찍힌 금액을 붙여 읽는다", () => {
     expect(extract(linesToFields(["합계        4 4 0 0"])).amount).toBe(4400);
   });

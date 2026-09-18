@@ -217,7 +217,11 @@ function cellAmount(text: string): number | null {
  */
 function amountTier(squashed: string): number {
   for (let t = AMOUNT_TIERS.length - 1; t >= 0; t -= 1) {
-    if (AMOUNT_TIERS[t].some((k) => squashed.includes(k))) return t;
+    if (AMOUNT_TIERS[t].some((k) => squashed.includes(k))) {
+      // '합계수량/금액  3  4,700' 처럼 수량 칸을 낀 라벨은 품목 소계다. 할인을 빼기 전 값이라
+      // 사용자가 낸 돈이 아니다. 후보에서 빼지는 않고 0등급으로 내린다.
+      return squashed.includes('수량') ? 0 : t;
+    }
   }
   return -1;
 }
