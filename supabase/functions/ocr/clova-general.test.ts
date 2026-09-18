@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { extract, linesFromFields, merchantOk } from "./clova-general.ts";
+import { extract, linesFromFields, merchantFromLine, merchantOk } from "./clova-general.ts";
+// 벤치 채점기와 같은 합성 좌표 생성기. 넓은 공백(2칸 이상)을 좌우 단으로 벌려 준다.
+// tsconfig 가 allowJs 를 끄고 있어 .mjs 에는 타입이 없다. 벤치 쪽 파일이라 손대지 않는다.
+// @ts-expect-error -- 타입 선언 없는 .mjs
+import { linesToFields } from "../../../scripts/ocr-bench/lib/synth-fields.mjs";
 import { resolve } from "./merge.ts";
 import { receipt1Fields, receipt2Fields, receipt3Fields } from "./clova-general.fixtures.ts";
 
@@ -238,5 +242,38 @@ describe("merchantOk: '…스시'·'…장군' 상호를 주소로 오인하지 
   // 둘째 토막이 구/군/읍/면 으로 안 끝나면 주소로 보지 않는다. '양평군 한우마을' 은 상호로 살아남는다.
   it("'군 + 일반 낱말' 은 주소로 보지 않는다", () => {
     expect(merchantOk("양평군 한우마을")).toBe(true);
+  });
+});
+
+/** 글자 줄 하나를 합성 좌표에 얹어 Line 으로. 벤치 채점기가 쓰는 것과 같은 생성기다. */
+function asLine(text: string) {
+  return linesFromFields(linesToFields([text]))[0];
+}
+
+describe("상호 토막 떼어내기: 줄에 로고·전화·번호가 붙어 있어도 상호만 뽑는다", () => {
+  // 전부 실제 영수증에서 가져온 줄이다. 번호는 같은 자릿수 가짜로 바꿨다.
+  // 줄을 통째로 상호 후보로 쓰던 시절에는 셋 다 길이·숫자 조건에 걸려 버려졌다.
+  const cases: Array<[string, string]> = [
+    ["emart   이마트 신촌점 (02)-116-1219", "이마트 신촌점"],
+    ["emart   이마트 충주점 (043)841-1234", "이마트 충주점"],
+    ["[V]외래 [ ]입원(( )퇴원( )중간) 진료비 계산서·영수증   중앙대학교병원", "중앙대학교병원"],
+    ["GS25성내동원점              024749333", "GS25성내동원점"],
+    ["emart everyday   이마트에브리데이 서초내곡점", "이마트에브리데이 서초내곡점"],
+    ["첫걸음산부인과의원              TID:***2506093", "첫걸음산부인과의원"],
+  ];
+  it.each(cases)("%s -> %s", (text, want) => expect(merchantFromLine(asLine(text))).toBe(want));
+
+  it("넓게 띄어 쓴 상호는 앞 토막만 집지 않고 줄 통째로 쓴다", () => {
+    expect(merchantFromLine(asLine("롯데쇼핑(주)                    잠실 점"))).toBe("롯데쇼핑(주) 잠실 점");
+  });
+
+  it("상호가 없는 줄에서는 억지로 토막을 고르지 않는다", () => {
+    expect(merchantFromLine(asLine("215-67-00093 대표자"))).toBeNull();
+    expect(merchantFromLine(asLine("[구매] 2025-12-25   18:42        POS:1509-0607"))).toBeNull();
+  });
+
+  it("사업자번호 줄 위가 로고+상호+전화번호 한 줄이어도 상호를 뽑는다", () => {
+    const fields = linesToFields(["emart   이마트 신촌점 (02)-116-1219", "215-67-00093 대표자"]);
+    expect(extract(fields).merchant).toBe("이마트 신촌점");
   });
 });
