@@ -54,11 +54,13 @@ const KRW = /\d{1,3}(?:,\d{3})+|\d+/g;
 // 다수결만 하면 '사용자가 낸 돈'이 아니라 '총액'이 뽑힌다. 그 값을 저장하면 카드 잔액이 틀어진다.
 //
 // 2등급 — 사용자가 실제로 낸 돈을 가리키는 라벨.
-const AMOUNT_PAID = ['본인부담', '납부할금액', '수납금액', '받을금액', '결제금액'];
+const AMOUNT_PAID = ['본인부담', '납부할금액', '수납금액', '받을금액', '받은금액', '결제금액', '결제요금', '결제액'];
 // 1등급 — 어느 쪽인지 알 수 없는 총계 낱말.
-const AMOUNT_SUM = ['합계', '판매금액', '카드매출', '총금액'];
-// 0등급 — 사용자가 낸 돈이 아닌 금액. 후보에서 빼지는 않는다(이것밖에 없는 영수증이 있다).
-const AMOUNT_OTHER = ['총액', '공단부담', '보험자부담', '비급여', '급여'];
+const AMOUNT_SUM = ['합계', '카드매출', '총금액', '주문금액', '티켓정보', 'TOTAL'];
+// 0등급 — 사용자가 낸 돈이 아닌 금액. 후보에서 빼지는 않는다(이것밖에 없는 영수증이 있다 —
+// receipt-3 은 '판매금액' 으로만 21,000 을 적는다). '판매금액' 은 부가세를 뺀 공급가라
+// 두 번 나오면 다수결로 이기므로 여기 둔다.
+const AMOUNT_OTHER = ['총액', '공단부담', '보험자부담', '비급여', '급여', '판매금액'];
 const AMOUNT_TIERS = [AMOUNT_OTHER, AMOUNT_SUM, AMOUNT_PAID];
 // 금액 줄에서 빼는 낱말. 위 세 등급을 먼저 보므로 "결제금액" 이 "금액" 때문에 빠지지 않는다.
 const AMOUNT_NO = ['부가세', '공급가', '단가', '금액', '과세물품', '면세', '봉사료', '거스름'];
@@ -190,8 +192,11 @@ function lastNumber(text: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-/** keyed=false 면 "합계" 같은 낱말 없이 "가장 큰 숫자" 규칙으로 고른 값이라 확신이 없다. */
-/** 라벨 등급. 라벨이 없으면 -1. 여러 등급이 섞인 줄은 높은 쪽을 따른다. */
+/**
+ * 라벨 등급. 라벨이 없으면 -1. 여러 등급이 섞인 줄은 높은 쪽을 따른다.
+ * 입력은 공백을 지운 뒤 대문자로 올린 글자다 — '결 제 액' 같은 자간 공백도,
+ * 소문자 'Total' 도 같은 라벨로 읽힌다.
+ */
 function amountTier(squashed: string): number {
   for (let t = AMOUNT_TIERS.length - 1; t >= 0; t -= 1) {
     if (AMOUNT_TIERS[t].some((k) => squashed.includes(k))) return t;
@@ -199,10 +204,11 @@ function amountTier(squashed: string): number {
   return -1;
 }
 
+/** keyed=false 면 "합계" 같은 낱말 없이 "가장 큰 숫자" 규칙으로 고른 값이라 확신이 없다. */
 function findAmount(lines: Line[]): { value: number | null; keyed: boolean } {
   const keyed: Array<{ tier: number; value: number }> = [];
   for (const l of lines) {
-    const tier = amountTier(squash(l.text)); // 등급이 NO 보다 세다 ("합계금액(부가세포함)")
+    const tier = amountTier(squash(l.text).toUpperCase()); // 등급이 NO 보다 세다 ("합계금액(부가세포함)")
     if (tier < 0) continue;
     const n = lastNumber(l.text);
     if (n !== null && n > 0) keyed.push({ tier, value: n });
@@ -217,7 +223,11 @@ function findAmount(lines: Line[]): { value: number | null; keyed: boolean } {
   }
 
   // 키워드 줄이 없을 때: 날짜/전화/사업자/승인/카드번호처럼 보이는 줄을 걸러내고 남은 금액 중 최댓값.
-  let best: number | null = null;
+  // 천 단위 쉼표가 찍힌 숫자가 하나라도 있으면 그것만 본다. 영수증의 금액은 쉼표를 달고
+  // 나오지만 사업자번호·전화번호·연도·수량·요금표는 달지 않는다. 최댓값을 고르기 전에
+  // 금액이 될 수 없는 것을 이 한 가지로 걸러 낸다.
+  const loose: number[] = [];
+  const comma: number[] = [];
   for (const l of lines) {
     const s = squash(l.text);
     if (AMOUNT_NO.some((k) => s.includes(k))) continue;
@@ -225,10 +235,11 @@ function findAmount(lines: Line[]): { value: number | null; keyed: boolean } {
     for (const raw of l.text.match(KRW) ?? []) {
       if (!raw.includes(',') && raw.length > 6) continue; // 승인번호·영수번호 같은 긴 맨숫자
       const n = Number(raw.replace(/,/g, ''));
-      if (n >= 100 && (best === null || n > best)) best = n;
+      if (n >= 100) (raw.includes(',') ? comma : loose).push(n);
     }
   }
-  return { value: best, keyed: false };
+  const pool = comma.length ? comma : loose;
+  return { value: pool.length ? Math.max(...pool) : null, keyed: false };
 }
 
 /** 줄에서 날짜만 찾아 YYYY-MM-DD 로. 시각은 따로 찾는다(다른 조각으로 쪼개져 나오기 때문). */

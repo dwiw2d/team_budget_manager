@@ -190,6 +190,67 @@ describe("merchantOk: 거름망이 멀쩡한 상호를 버리지 않는다", () 
   it.each(drop)("상호로 받지 않는다: %s", (v) => expect(merchantOk(v)).toBe(false));
 });
 
+describe("금액 라벨 등급: 동점일 때 사용자가 낸 값을 고른다", () => {
+  it("진료비 서식에서 '총액' 대신 본인부담 '합계' 를 고른다", () => {
+    // 이 표는 총액·보험자부담·본인부담이 나란히 있다. 큰 값을 고르면 총액이 저장돼
+    // 카드 잔액이 틀어진다. 실제로 저장되는 값이라 인식률보다 이쪽이 더 중요하다.
+    const fields = linesToFields([
+      "약제비총액(1+2+3)   26,990 원",
+      "본인부담금(1)        8,000 원",
+      "보험자부담금(2)     18,990 원",
+      "합  계               8,000 원",
+    ]);
+    expect(extract(fields).amount).toBe(8000);
+  });
+
+  it("할인·쿠폰을 빼기 전 '합계' 대신 '결제금액' 을 고른다", () => {
+    const fields = linesToFields(["합계      13,400", "쿠폰      6,900", "할인      2,000", "결제금액   4,500"]);
+    expect(extract(fields).amount).toBe(4500);
+  });
+
+  it("공급가인 '판매금액' 이 두 번 나와도 '합계금액' 에 진다", () => {
+    const fields = linesToFields([
+      "[판 매 금 액] 90,909",
+      "[승 인 금 액] 100,000",
+      "판 매 금 액: 90,909",
+      "합 계 금 액: 100,000",
+    ]);
+    expect(extract(fields).amount).toBe(100000);
+  });
+
+  it("'판매금액' 밖에 없으면 그대로 쓴다", () => {
+    expect(extract(linesToFields(["판매금액   21,000"])).amount).toBe(21000);
+  });
+
+  it("라벨이 없으면 등급 차이가 없으므로 예전처럼 큰 값을 고른다", () => {
+    expect(extract(linesToFields(["아메리카노 4,500", "케이크 7,000"])).amount).toBe(7000);
+  });
+});
+
+describe("금액 라벨 사전: 자간 공백·영문·주문/티켓 서식", () => {
+  it.each([
+    ["총 주문금액   26,700원", 26700],
+    ["결제 요금 :  6,800원", 6800],
+    ["티켓정보: 조조성인8,000원", 8000],
+    ["TOTAL   8,000", 8000],
+    ["받은금액   21,000", 21000],
+    ["결 제 액   12,000", 12000],
+  ])("%s 를 금액 줄로 읽는다", (line, want) => {
+    expect(extract(linesToFields([line])).amount).toBe(want);
+  });
+});
+
+describe("금액 fallback: 라벨이 하나도 없을 때", () => {
+  it("쉼표가 찍힌 숫자가 있으면 사업자번호·요금표 토막은 보지 않는다", () => {
+    const fields = linesToFields(["106-81-23498 (주)롯데리아 월드몰 3층점", "T-REX세트   5,600"]);
+    expect(extract(fields).amount).toBe(5600);
+  });
+
+  it("쉼표가 하나도 없으면 예전처럼 맨숫자 중 큰 값을 고른다", () => {
+    expect(extract(linesToFields(["아메리카노 4500", "케이크 7000"])).amount).toBe(7000);
+  });
+});
+
 describe("weak", () => {
   it("합계·총액 같은 낱말 없이 가장 큰 숫자로 고른 금액은 확신하지 않는다", () => {
     const noKeyword = linesToFields(["아메리카노 4,500", "케이크 7,000"]);
