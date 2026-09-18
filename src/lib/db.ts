@@ -1,5 +1,6 @@
 import { supabase } from "./supabase";
 import type { CardBalance, CardInput, NewPayment, OcrQuota, PaymentWithCard } from "./types";
+import { AppError } from "./errors";
 
 const PAYMENT_WITH_CARD = "*, cards(name)";
 
@@ -47,7 +48,7 @@ export async function insertPayment(p: NewPayment): Promise<string> {
 async function receiptPath(paymentId: string): Promise<string> {
   const { data } = await supabase.auth.getSession();
   const userId = data.session?.user.id;
-  if (!userId) throw new Error("로그인이 필요합니다");
+  if (!userId) throw new AppError("로그인이 필요합니다");
   return `${userId}/${paymentId}.jpg`;
 }
 
@@ -103,7 +104,7 @@ export async function deleteCard(id: string): Promise<void> {
       .from("payments")
       .select("*", { count: "exact", head: true })
       .eq("card_id", id);
-    throw new Error(`결제 ${count ?? 0}건이 있어 삭제할 수 없습니다`);
+    throw new AppError(`결제 ${count ?? 0}건이 있어 삭제할 수 없습니다`);
   }
   if (error) throw error;
 }

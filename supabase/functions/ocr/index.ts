@@ -8,6 +8,10 @@
 // config.toml 의 [functions.ocr] verify_jwt = false 이므로 JWT 는 여기서 직접 검증한다.
 // 이 파일은 Deno 전용이라 tsconfig 의 typecheck 대상에서 제외되어 있다(exclude).
 import { createClient } from "npm:@supabase/supabase-js@2";
+// 허용 헤더는 손으로 적지 않고 SDK 가 내놓는 목록을 쓴다. 손 목록이 SDK 를 못 따라가
+// x-retry-count 가 빠졌고, 프리플라이트가 막혀 POST 자체가 나가지 않은 적이 있다.
+// ./cors 하위 경로는 @supabase/supabase-js 2.116.0 의 package.json exports 에 있다.
+import { corsHeaders as sdkCors } from "npm:@supabase/supabase-js@2/cors";
 import { extract, type OcrField } from "./clova-general.ts";
 import {
   buildRequest,
@@ -21,11 +25,21 @@ import { type ClovaOutcome, merge, resolve } from "./merge.ts";
 import { decideProviders, isQuotaExceeded, type OcrQuota } from "./quota.ts";
 import { receipt1Fields } from "./clova-general.fixtures.ts";
 
+// SDK 목록에 없는 것들. x-region 은 functions.invoke 의 region 옵션을 쓸 때 붙는다.
+const OUR_HEADERS = ["authorization", "apikey", "content-type", "x-client-info", "x-region"];
+// SDK 목록과 합집합으로 둔다. 가져온 값이 비어 있거나 모양이 달라도 우리 목록만으로 돌아간다 —
+// 헤더가 좀 넓은 것보다 프리플라이트가 막혀 함수가 통째로 못 쓰이는 쪽이 나쁘다.
+const ALLOW_HEADERS = [...new Set([
+  ...String(sdkCors?.["Access-Control-Allow-Headers"] ?? "").split(",").map((h) => h.trim()).filter(Boolean),
+  ...OUR_HEADERS,
+])].join(", ");
+
 const CORS_HEADERS = {
+  // 출처는 * 그대로 둔다: 이 함수는 쿠키를 쓰지 않고 Bearer 토큰만 보며 Allow-Credentials 도 없어서
+  // 제3 사이트가 사용자 세션을 자동으로 실어 보낼 수 없다. CORS 는 애초에 브라우저 밖 호출을 막지
+  // 못하므로 출처를 좁혀도 실질 이득이 없다.
   "Access-Control-Allow-Origin": "*",
-  // supabase-js 가 X-Client-Info 를 항상 보낸다. 빠지면 브라우저가 프리플라이트에서 막아
-  // POST 자체가 나가지 않는다. x-region 은 functions.invoke 의 region 옵션을 쓸 때 붙는다.
-  "Access-Control-Allow-Headers": "authorization, apikey, content-type, x-client-info, x-region",
+  "Access-Control-Allow-Headers": ALLOW_HEADERS,
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 const MAX_IMAGE_BASE64 = 5 * 1024 * 1024; // 5MB (base64 문자열 기준)

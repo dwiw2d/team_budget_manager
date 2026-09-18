@@ -46,9 +46,9 @@
 - 로컬 비밀 값은 `.env.local`(git 무시)에 있다. 키 이름: `SUPABASE_ACCESS_TOKEN`, `SUPABASE_PROJECT_REF`, `SUPABASE_DB_PASSWORD`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `APP_OWNER_EMAIL`, `APP_OWNER_PASSWORD`, (아침에 추가) `NAVER_OCR_GENERAL_INVOKE_URL`, `NAVER_OCR_GENERAL_SECRET`, (선택) `GEMINI_API_KEY`, `GEMINI_MODEL`. **값을 로그·커밋·문서에 절대 출력하지 않는다.**
 - Supabase 프로젝트 ref `owxbsjsetesazmnqvzxd`(도쿄). CLI는 `npx supabase`(2.117.0)로 실행하고 `SUPABASE_ACCESS_TOKEN` 환경 변수를 넘긴다.
 
-## 4. 데이터 모델 (마이그레이션 `supabase/migrations/0001_init.sql` ~ `0008_receipt_storage.sql`)
+## 4. 데이터 모델 (마이그레이션 `supabase/migrations/0001_init.sql` ~ `0009_function_grants.sql`)
 
-아래 DDL이 계약이다. 컬럼 이름을 바꾸지 않는다. 마이그레이션은 `0001` ~ `0008` 여덟 개이고, 클라우드에 적용된 파일은 수정하지 않으며 이후 변경은 번호를 올린 파일로 쌓는다. `0002_reset_at.sql` 이 `cards.reset_date date` 를 `cards.reset_at timestamptz` 로 바꿨고, `0003_card_prefix.sql` 이 `cards.last4` 를 `cards.card_prefix` 로 바꿨다(영수증이 뒤 4자리를 가리므로 앞자리로 맞춘다). `0004_stored_balance.sql` 이 잔액을 저장값으로 바꾼다: `cards.balance`·`cards.balance_month` 를 더하고 `cards.reset_at` 을 없애며, 결제 트리거·`roll_over_balances()`·뷰를 새로 만든다. `0005_ocr_quota.sql` 이 OCR 무료 한도용 `ocr_limits`·`ocr_usage` 두 표와 `ocr_period`·`ocr_quota`·`ocr_quota_consume`·`ocr_quota_exhaust` 네 함수를 더한다(§5 참조). `0006_receipt_images.sql` 이 영수증 사진 표 `receipt_images` 를 더했고, `0008_receipt_storage.sql` 이 그 표를 지우고 사진을 파일 저장소로 옮기면서 `purge_old_payments()` 를 다시 만든다(아래 참조). 아래는 장부 쪽 마이그레이션(`0001`~`0004`, `0008`)을 적용한 최종 형태다.
+아래 DDL이 계약이다. 컬럼 이름을 바꾸지 않는다. 마이그레이션은 `0001` ~ `0009` 아홉 개이고, 클라우드에 적용된 파일은 수정하지 않으며 이후 변경은 번호를 올린 파일로 쌓는다. `0002_reset_at.sql` 이 `cards.reset_date date` 를 `cards.reset_at timestamptz` 로 바꿨고, `0003_card_prefix.sql` 이 `cards.last4` 를 `cards.card_prefix` 로 바꿨다(영수증이 뒤 4자리를 가리므로 앞자리로 맞춘다). `0004_stored_balance.sql` 이 잔액을 저장값으로 바꾼다: `cards.balance`·`cards.balance_month` 를 더하고 `cards.reset_at` 을 없애며, 결제 트리거·`roll_over_balances()`·뷰를 새로 만든다. `0005_ocr_quota.sql` 이 OCR 무료 한도용 `ocr_limits`·`ocr_usage` 두 표와 `ocr_period`·`ocr_quota`·`ocr_quota_consume`·`ocr_quota_exhaust` 네 함수를 더한다(§5 참조). `0006_receipt_images.sql` 이 영수증 사진 표 `receipt_images` 를 더했고, `0008_receipt_storage.sql` 이 그 표를 지우고 사진을 파일 저장소로 옮기면서 `purge_old_payments()` 를 다시 만든다(아래 참조). `0009_function_grants.sql` 은 스키마를 건드리지 않고 권한만 정리한다: `payments_adjust_balance()` 의 EXECUTE 회수, `payments_before_update`·`current_period_start`·`cards_set_balance`·`ocr_period(text)` 네 함수에 `search_path = public` 고정, `cards`·`payments`·`card_balances` 에서 `anon` 권한 회수(`authenticated` 와 `ping()` 은 그대로 둔다). 아래는 장부 쪽 마이그레이션(`0001`~`0004`, `0008`)을 적용한 최종 형태다.
 
 **매월 채움을 스케줄러 없이 구현한 방법**: `pg_cron` 같은 배치를 두지 않고, 잔액 기간이 지난 카드를 손대는 세 순간에 각각 넘긴다 — (1) 결제 트리거가 잔액을 조정하기 직전, (2) 앱 진입 시 `roll_over_balances()` RPC, (3) 그래도 아직 안 넘어간 카드를 위해 뷰 `card_balances` 가 조회 시 예산으로 보정해서 낸다.
 
@@ -142,11 +142,11 @@ return 삭제 건수;
 
 - 경로 `supabase/functions/ocr/index.ts`(Deno). `supabase/config.toml`의 `[functions.ocr] verify_jwt = false`로 두고 함수 안에서 `Authorization: Bearer <access_token>`을 `supabase.auth.getUser()`로 검증한다. 실패 시 401.
 - 요청: `POST` JSON `{ "image": "<base64, data: 접두어 없음>", "format": "jpg" | "png" }`. 최대 5MB(base64 기준 초과 시 413).
-- **CORS**: `Access-Control-Allow-Headers` 는 `authorization, apikey, content-type, x-client-info, x-region` 이다. supabase-js 의 `functions.invoke` 가 `X-Client-Info` 를 항상 붙이므로 이 이름이 빠지면 브라우저가 프리플라이트에서 막아 본 POST 가 아예 나가지 않는다(`x-region` 은 `region` 옵션을 쓸 때 붙는다).
+- **CORS**: `Access-Control-Allow-Headers` 는 손으로 적지 않고 SDK 가 내놓는 목록(`npm:@supabase/supabase-js@2/cors` 의 `corsHeaders`)과 우리 목록 `authorization, apikey, content-type, x-client-info, x-region` 의 합집합이다. 손 목록이 SDK 를 못 따라가 `x-retry-count` 가 빠지자 브라우저가 프리플라이트에서 막아 본 POST 가 아예 나가지 않은 적이 있다(`x-region` 은 `region` 옵션을 쓸 때 붙고 SDK 목록에는 없다). 가져온 값이 비어 있거나 모양이 달라도 우리 목록만으로 돌아간다. `Access-Control-Allow-Origin` 은 `*` 이다 — 이 함수는 쿠키 없이 Bearer 토큰만 보고 `Allow-Credentials` 도 없어 제3 사이트가 사용자 세션을 자동으로 실어 보낼 수 없으며, CORS 는 애초에 브라우저 밖 호출을 막지 못한다.
 - 응답 200: `{ "merchant": string|null, "paidAt": string|null, "amount": number|null, "cardNumber": string|null, "uncertain": string[] }`. `paidAt`은 `YYYY-MM-DDTHH:mm:ss+09:00` 형식. 읽지 못한 항목은 null. `uncertain`은 사용자가 확인해야 하는 필드 이름들이다.
 - **1단계 CLOVA General OCR**: `POST ${NAVER_OCR_GENERAL_INVOKE_URL}`(콘솔이 주는 Invoke URL 이 이미 `/general` 로 끝나므로 뒤에 아무것도 붙이지 않는다), 헤더 `X-OCR-SECRET: ${NAVER_OCR_GENERAL_SECRET}`, 본문 `{ version: "V2", requestId: <uuid>, timestamp: Date.now(), lang: "ko", images: [{ format, name: "receipt", data: <base64> }] }`. 응답 `images[0].fields[]`(`inferText`, `lineBreak`, `boundingPoly`)를 `clova-general.ts` 파서가 네 필드로 바꾼다.
-- 상호는 (a) `상호:`/`가맹점명:` 라벨 값 → (c) 사업자번호 줄 바로 위 줄 → (b) 대표자/TEL 줄의 오른쪽 끝 토막 순서로 찾는다. (c) 가 (b) 보다 앞이다 — 상호가 제 줄에 따로 있는데도 사업자번호 줄 오른쪽 끝의 대표자 이름을 집어가는 영수증이 있다. (c) 는 `사업자번호` 라벨 없이 번호만 찍는 영수증이 많아 `\d{3}-\d{2}-\d{5}` 모양도 같이 본다.
-- 파서는 `weak: string[]` 로 확신 없음을 알린다: merchant가 null / amount가 null / amount를 "합계·총액·결제금액" 같은 낱말 없이 "가장 큰 숫자" 규칙으로 고름 / paidAt이 null / 시각을 못 찾아 `00:00:00`으로 채움. cardNumber는 영수증에 원래 없는 경우가 많아 weak에 넣지 않는다.
+- 상호는 (a) `상호:`/`가맹점명:` 라벨 값 → (c) 사업자번호 줄 바로 위 줄 → (b) 대표자/TEL 줄의 오른쪽 끝 토막 순서로 찾는다. (c) 가 (b) 보다 앞이다 — 상호가 제 줄에 따로 있는데도 사업자번호 줄 오른쪽 끝의 대표자 이름을 집어가는 영수증이 있다. (c) 는 `사업자번호` 라벨 없이 번호만 찍는 영수증이 많아 `\d{3}-\d{2}-\d{5}` 모양도 같이 본다. **(c) 의 확신도는 라벨 유무로 가른다**: `사업자번호` 글자가 실제로 찍힌 줄은 POS 머리글이라 제목/상호/사업자번호 차례가 거의 지켜지므로 확신하고, 라벨 없이 숫자 모양만 보고 찾았으면 영수번호 같은 다른 3-2-5 번호일 수 있어 값을 내되 `weak` 에 `merchant` 를 단다. 상호 후보에서 거르는 말에는 `대표`·`사장`·`점장`·`담당`·`계산원` 같은 사람 역할과, 시/도 이름 없이 시작하는 주소(`…시`·`…구`·`…동`·`…로`·`…길` 로 끝나는 토막이 둘 이상인 줄 — 하나만으로 거르면 `맷돌로` 같은 상호가 날아간다)가 들어간다.
+- 파서는 `weak: string[]` 로 확신 없음을 알린다: merchant가 null / merchant를 라벨 없는 사업자번호 모양 줄의 윗줄이라는 자리만 보고 고름 / amount가 null / amount를 "합계·총액·결제금액" 같은 낱말 없이 "가장 큰 숫자" 규칙으로 고름 / paidAt이 null / 시각을 못 찾아 `00:00:00`으로 채움. cardNumber는 영수증에 원래 없는 경우가 많아 weak에 넣지 않는다.
 - **2단계 Gemini**: `weak`가 비어 있지 않거나 **1단계가 통째로 실패했고**(네트워크 오류, HTTP 오류, `inferResult`가 `SUCCESS`가 아님, 응답 파싱 실패) `GEMINI_API_KEY`가 있을 때 `POST https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`(헤더 `x-goog-api-key`)를 부른다. 모델 기본값은 `gemini-3.6-flash`(`gemini-2.5-flash`는 신규 사용자에게 막혀 404). 구조화 출력으로 같은 네 필드를 받는다.
 - **2단계 재시도**: Gemini 무료 등급은 HTTP 503 `UNAVAILABLE`("model is currently experiencing high demand")을 흔히 낸다(실측). `gemini.ts` 의 순수 함수 `shouldRetry(status)` 가 **503·500 만** 일시적 실패로 보고 다시 부른다. 재시도는 **최대 2회 추가(총 3회)**, 사이 대기는 `RETRY_DELAYS_MS = [1000, 3000]` ms 다(Edge Function 실행 시간 제한이 있어 더 늘리지 않는다). **429 는 재시도하지 않는다** — 한도 초과라 `isQuotaExceeded` 가 그 기간을 닫는다.
 - **2단계 모델 교체**: 시도마다 모델을 갈아탄다. 순서는 `gemini.ts` 의 순수 함수 `modelChain(GEMINI_MODEL)` 이 정하고 **`GEMINI_MODEL` → `gemini-3.5-flash` → `gemini-flash-latest`** 로 중복 없이 만든다(`GEMINI_MODEL` 이 비면 `gemini-3.6-flash` 가 첫째). 3.6 이 과부하로 막히는 동안 3.5 가 같은 사진을 읽어 냈고, `flash-latest` 는 구글이 그때그때 쓸 수 있는 flash 로 붙여 주므로 마지막 안전망이다. 모델을 바꿔도 한도 차감은 한 번뿐이다.
@@ -174,7 +174,7 @@ return 삭제 건수;
 5. **카드 `/cards`**: 카드 목록(이름, 카드번호 앞자리, 예산, 잔액). 목록 위에는 "카드 추가" 버튼 하나만 둔다. 카드 추가/수정 모달(이름, 예산, 카드번호 앞자리 선택): 예산 입력 아래에 "예산을 바꾸면 다음 달 1일부터 적용됩니다" 를 작은 글씨로 우측 정렬해 둔다. 앞자리 입력의 라벨은 "카드번호 앞 6~8자리(선택)"이고 그 아래에 "영수증은 뒤 4자리를 가리므로 앞자리로 맞춥니다" 한 줄을 둔다. 숫자 6~8자리가 아니면 저장하지 않는다. 카드 상세 시트: 이름·카드번호 앞자리·예산·잔액을 보여주고 예산 아래에 같은 안내 한 줄을 우측 정렬해 둔다. 버튼은 "수정"·"삭제" 둘뿐이다(`grid-cols-2`). **초기화 버튼은 카드별도 전체도 없다** — 잔액은 매월 1일 0시에 저절로 채워진다. 삭제는 확인창 후 실행하고 FK 오류면 안내.
 6. **설정 `/settings`**: PIN 변경(현재 PIN·새 PIN·새 PIN 확인 3개 입력. 현재 PIN 은 `signInWithPassword`로 확인한 뒤 `auth.updateUser`로 변경), 로그아웃, 앱 버전 표시.
 
-PWA: manifest `name`/`short_name` "SW2HW 장부", `display: standalone`, `lang: ko`, `theme_color`, 아이콘 192·512 PNG(+ SVG 원본, 글자 "S"). 서비스워커는 vite-plugin-pwa `generateSW`, `registerType: 'autoUpdate'`, 앱 셸만 프리캐시하고 Supabase 요청은 캐시하지 않는다.
+PWA: manifest `name`/`short_name` "SW2HW 장부", `display: standalone`, `lang: ko`, `theme_color`, 아이콘 192·512 PNG(+ SVG 원본, 글자 "S"). 서비스워커는 vite-plugin-pwa `generateSW`, `registerType: 'prompt'`, 앱 셸만 프리캐시하고 Supabase 요청은 캐시하지 않는다. 입력 중인 화면이 말없이 새로고침되지 않게 자동 적용 대신 `useRegisterSW()` 의 `needRefresh` 로 오프라인 막대 옆에 "새 버전이 있습니다. 새로고침" 한 줄을 띄우고, 누르면 `updateServiceWorker(true)` 가 갈아끼운다.
 
 ## 7. 인증·보안
 
@@ -182,6 +182,8 @@ PWA: manifest `name`/`short_name` "SW2HW 장부", `display: standalone`, `lang: 
 - 공개 가입 차단: `supabase/config.toml` `[auth] enable_signup = false` + 클라우드에는 `scripts/disable-signup.mjs`(Management API `PATCH /v1/projects/{ref}/config/auth` `{ "disable_signup": true }`, PAT 사용). 차단 확인은 anon 키로 `signUp` 시도 → 오류.
 - PIN 복구(앱 밖): README에 SQL 편집기용 `update auth.users set encrypted_password = crypt('새비밀번호', gen_salt('bf')) where email = 'owner@sw2hw.local';` 를 적는다.
 - 브라우저에는 anon 키만 있다. 데이터 보호는 RLS, 삭제·수정 금지는 정책과 트리거가 맡는다. UI 제한은 보조일 뿐이다.
+- CSP: 배포처인 GitHub Pages 가 HTTP 헤더를 넣을 수 없어 `index.html` 의 `<meta http-equiv="Content-Security-Policy">` 로 둔다(`script-src 'self'`, `style-src 'self' 'unsafe-inline'`, `img-src`·`connect-src` 는 `'self'` + Supabase 출처. 출처는 Vite 가 `%VITE_SUPABASE_URL%` 을 빌드 때 치환한다). `Referrer-Policy` 는 meta 로 온전히 대체되므로 `<meta name="referrer">` 도 함께 둔다. `frame-ancestors` 는 meta 로는 무시되므로 `nginx.conf` 쪽에만 둔다 — 자체 호스팅 경로는 같은 정책을 진짜 헤더로 내보내고 `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`(`camera=(self)`), `X-Frame-Options: DENY` 를 더한다(nginx 는 하위 블록에 `add_header` 가 있으면 상위를 물려주지 않으므로 두 `location` 에 모두 적는다).
+- 오류 문구: Supabase/Postgres 원본 메시지(RLS 정책 이름·테이블명·제약조건 원문)를 화면에 그대로 내보내지 않는다. 화면은 `src/lib/errors.ts` 의 `userMessage(e, fallback)` 로 고정 한국어 문구를 쓴다(오프라인이면 네트워크 안내, `code`·`status` 가 없는 Error 는 `db.ts` 가 직접 만든 안내 문구라 그대로 통과).
 
 ## 8. 배포·운영
 
@@ -208,7 +210,7 @@ src/
   pages/Login.tsx, Home.tsx, AddPayment.tsx, Payments.tsx, Cards.tsx, Settings.tsx
   components/(공통 소품 최소)
 public/icons/
-supabase/config.toml, migrations/{0001_init,0002_reset_at,0003_card_prefix,0004_stored_balance,0005_ocr_quota,0006_receipt_images,0007_*,0008_receipt_storage}.sql
+supabase/config.toml, migrations/{0001_init,0002_reset_at,0003_card_prefix,0004_stored_balance,0005_ocr_quota,0006_receipt_images,0007_*,0008_receipt_storage,0009_function_grants}.sql
           functions/ocr/{index.ts,clova-general.ts,gemini.ts,merge.ts,quota.ts,*.fixtures.ts,*.test.ts}
 scripts/{seed-owner,disable-signup,set-secrets,set-db-secrets,db-smoke}.mjs
 Dockerfile, nginx.conf, docker-compose.yml, README.md

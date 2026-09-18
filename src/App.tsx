@@ -10,6 +10,7 @@ import {
   Routes,
   useLocation,
 } from "react-router-dom";
+import { useRegisterSW } from "virtual:pwa-register/react";
 import { supabase } from "./lib/supabase";
 import AddPayment from "./pages/AddPayment";
 import Cards from "./pages/Cards";
@@ -81,6 +82,12 @@ export default function App() {
   // undefined = 세션 확인 전(INITIAL_SESSION 대기)
   const [session, setSession] = useState<Session | null>();
   const online = useOnline();
+  // 새 서비스 워커가 대기하면(registerType: prompt) 막대를 띄운다. 자동으로 갈아치우지 않는 것은
+  // 입력 중인 화면이 말없이 새로고침되지 않게 하려는 것이다.
+  const {
+    needRefresh: [needRefresh],
+    updateServiceWorker,
+  } = useRegisterSW();
 
   useEffect(() => {
     const {
@@ -96,6 +103,18 @@ export default function App() {
       {!online && (
         <div className="sticky top-0 z-10 bg-red-600 px-4 pb-2 pt-[calc(env(safe-area-inset-top)+0.5rem)] text-center text-sm text-white">
           네트워크 연결을 확인하세요
+        </div>
+      )}
+      {needRefresh && (
+        <div className="sticky top-0 z-10 flex items-center justify-center gap-2 bg-slate-900 px-4 pb-2 pt-[calc(env(safe-area-inset-top)+0.5rem)] text-sm text-white">
+          새 버전이 있습니다.
+          <button
+            type="button"
+            className="min-h-11 px-2 font-bold underline"
+            onClick={() => updateServiceWorker(true)}
+          >
+            새로고침
+          </button>
         </div>
       )}
       <Routes>
