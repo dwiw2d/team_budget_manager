@@ -81,6 +81,9 @@ const MERCHANT_BAD = new RegExp([
 const BIZNO = /\b\d{3}-\d{2}-\d{5}\b/;
 // 번호 모양이 아니어도 라벨만으로 자리를 알 수 있다("사업자등록번호:7436000775").
 const BIZNO_LABEL = /사업자(등록)?번호/;
+// 토막에 라벨과 번호 말고 다른 것이 섞였는지 볼 때 쓴다(onlyBiznoLine).
+const BIZNO_G = new RegExp(BIZNO.source, 'g');
+const BIZNO_LABEL_ONLY = /^사업자(등록)?번호[:：]?$/;
 // 시/도 이름으로 '시작'하는 주소. 이름 뒤에 행정 접미사나 공백이 와야 주소로 본다 —
 // 그냥 접두어로만 보면 '서울법인115'·'강원대학교병원'·'제주도횟집' 같은 진짜 상호를 버린다.
 const ADDRESS =
@@ -93,6 +96,14 @@ const ADDRESS =
 // 지명의 '시/군' 으로 오인되지만, 그렇게 끝나는 시·군 이름은 없어 진짜 주소는 그대로 걸린다.
 const ADDRESS_FULL = /(^|\s)[가-힣]{2,}((?<!스)시|(?<!장)군)\s+\S+(구|군|읍|면)(\s|$)/;
 const looksAddress = (v: string): boolean => ADDRESS.test(v) || ADDRESS_FULL.test(v);
+
+// 영수증 위아래에 찍히는 인사말·안내 문구. 상호가 아닌데 merchantOk 를 통과해
+// 앵커 없는 (d) 경로에서 상호 자리로 올라온다. 두 갈래로 나눠 본다.
+// (1) 존댓말 종결어미와 안내 낱말은 상호에 안 쓰이므로 어디에 있든 거른다
+//     ('…니다'/'…세요' 는 '사장님이미쳤어요' 같은 진짜 상호를 건드리지 않는다).
+const NOTICE = /니다|세요|교환|환불|적립|반품/;
+// (2) '감사'·'고객' 은 상호에도 쓰인다(감사식당, 고객만족센터). 그 말뿐인 단독 문장일 때만 거른다.
+const NOTICE_ALONE = /^(?:감사|고객|고객님|안내)[.!]?$/;
 
 // 사람 역할을 가리키는 말. 사업자번호 줄 위아래에 상호 대신 "대표 홍길동" 이 오는 영수증이 있다.
 // 한글에는 \b 가 없어 부분 문자열로 걸면 '대표과일'·'계산원조갈비'까지 버린다. 그래서
@@ -400,11 +411,17 @@ export function merchantOk(text: string, labelled = false): boolean {
   const v = text.trim();
   // 상한은 실제로 본 가장 긴 상호('(유)아웃백스테이크하우스코리아 신대방점' 21자)보다 넉넉히 둔다.
   if (v.length < 2 || v.length > 25) return false;
+  // 두 글자짜리 영문 토막은 상호가 아니라 말머리다. "No 001-22-33444" 의 'No' 가 그래서
+  // 영수번호 줄을 상호로 통과시켰다. 한글이 든 두 글자('1호'·'본점')는 그대로 둔다.
+  if (v.length === 2 && !hasHangul(v)) return false;
   if (/[[\]]/.test(v)) return false; // "[고객용]" 같은 말머리
   if (!labelled && /\d{3}/.test(v)) return false; // 번호·금액이 섞인 줄
   if ((v.match(/[가-힣A-Za-z]/g) ?? []).length < 2) return false;
+  if (NOTICE_ALONE.test(squash(v))) return false;
   // 자간 공백을 붙인 꼴로도 한 번 더 본다.
-  return [v, deKern(v)].every((x) => !looksAddress(x) && !MERCHANT_BAD.test(x) && !MERCHANT_ROLE.test(x));
+  return [v, deKern(v)].every(
+    (x) => !looksAddress(x) && !MERCHANT_BAD.test(x) && !MERCHANT_ROLE.test(x) && !NOTICE.test(x),
+  );
 }
 
 /** 라벨이 가리키는 상호를 뽑는다. 없으면 null. */
@@ -445,8 +462,20 @@ function labelledMerchant(line: Line): string | null {
 }
 
 /**
+ * 앵커 줄이 라벨과 사업자등록번호'만'으로 이루어진 깨끗한 줄인지. 토막 기준으로 본다.
+ * 라벨은 그 줄이 사업자번호 줄임을 말할 뿐, 윗줄이 상호임을 보장하지 않는다.
+ * 그래서 확신은 라벨의 유무가 아니라 앵커 줄에 다른 것이 섞였는지로 가른다.
+ */
+function onlyBiznoLine(line: Line): boolean {
+  return segments(line).every((seg) => {
+    const rest = squash(seg).replace(BIZNO_G, '');
+    return rest === '' || BIZNO_LABEL_ONLY.test(rest);
+  });
+}
+
+/**
  * sure=false 면 라벨이 가리킨 값이 아니라 자리만 보고 고른 값이라 확신이 없다 —
- * 라벨 없는 번호 줄 언저리(c), 위로 더 올라간 줄(c2), 앵커 없이 맨 위 줄(d)이 그렇다.
+ * 깨끗하지 않은 사업자번호 줄 언저리(c), 위로 더 올라간 줄(c2), 앵커 없이 맨 위 줄(d)이 그렇다.
  */
 function findMerchant(lines: Line[]): { value: string | null; sure: boolean } {
   // (a) "상호:" / "가맹점명:" 같은 라벨의 값.
@@ -463,20 +492,23 @@ function findMerchant(lines: Line[]): { value: string | null; sure: boolean } {
   //     (b) 보다 먼저 본다 — 상호가 제 줄에 따로 있는데도 사업자번호 줄 오른쪽 끝의
   //     대표자 이름을 집어가는 일이 있다("321-98-76543 TEL)... 박민수").
   //     라벨 없이 번호만 찍는 영수증이 있어 '사업자번호' 글자와 번호 모양을 둘 다 본다.
-  //     확신도는 라벨 유무로 가른다. '사업자번호' 글자가 실제로 찍힌 줄은 POS 가 만든 머리글이라
-  //     제목 / 상호 / 사업자번호 차례가 거의 지켜진다. 반대로 라벨 없이 3-2-5 숫자 모양만 보고
-  //     찾은 줄은 영수번호 같은 다른 번호일 수 있고("No 001-22-33444") 윗줄도 상호가 아닐 때가
-  //     많다. 그래서 숫자 모양으로 찾았으면 확신하지 않는다(sure=false) — 2단계 Gemini 가
-  //     교차 확인하고 화면에도 "확인해 주세요" 가 뜬다.
+  //     확신도는 라벨의 유무가 아니라 '앵커 줄에 다른 것이 섞였는지'로 가른다. 라벨은 그 줄이
+  //     사업자번호 줄임을 말할 뿐, 윗줄이 상호임을 보장하지 않는다. 라벨과 번호뿐인 깨끗한 줄은
+  //     POS 가 찍은 머리글이라 제목 / 상호 / 사업자번호 차례가 거의 지켜지지만, 다른 것이 섞인
+  //     줄은 표 머리글이거나("사업자등록번호 가맹점 전화번호") 상호 칸이 더 붙은 줄이라
+  //     ("사업자등록번호 895-38-00624 상 호") 윗줄이 안내문·표어인 일이 많다. 라벨 없이 3-2-5
+  //     숫자 모양만 보고 찾은 줄도 마찬가지다 — 영수번호일 수 있다("No 001-22-33444").
+  //     그래서 깨끗한 줄이 아니면 확신하지 않는다(sure=false) — 2단계 Gemini 가 교차 확인하고
+  //     화면에도 "확인해 주세요" 가 뜬다.
   const i = lines.findIndex((l) => BIZNO_LABEL.test(squash(l.text)) || BIZNO.test(l.text));
   if (i >= 0) {
-    const labelled = BIZNO_LABEL.test(squash(lines[i].text));
+    const sure = BIZNO_LABEL.test(squash(lines[i].text)) && onlyBiznoLine(lines[i]);
     // 사업자번호가 상호와 같은 줄일 수도 있다. 윗줄보다 먼저 본다.
     const same = merchantBeforeBizno(lines[i]);
-    if (same) return { value: same, sure: labelled };
+    if (same) return { value: same, sure };
     if (i > 0) {
       const above = merchantFromLine(lines[i - 1]);
-      if (above) return { value: above, sure: labelled };
+      if (above) return { value: above, sure };
     }
   }
 

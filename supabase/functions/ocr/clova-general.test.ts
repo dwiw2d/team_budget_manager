@@ -117,25 +117,49 @@ describe("상호 규칙 (c): 자리만 보고 고른 값", () => {
   // 화면의 "확인해 주세요" 표시도 열린다. 절대 하면 안 되는 것은 '확신하면서 틀리는' 것이다.
 
   it("윗줄이 '대표 <이름>' 이면 그 이름 대신 그 위의 상호를 고른다", () => {
-    const fields = [line("행복식당", 0), line("대표 홍길동", 40), line("123-45-67890", 80)];
+    const fields = linesToFields(["행복식당", "대표 홍길동", "123-45-67890"]);
     expect(extract(fields).merchant).toBe("행복식당");
     expect(extract(fields).weak).toContain("merchant");
   });
 
   it("윗줄이 시/도 이름 없이 시작하는 주소면 그 주소 대신 그 위의 상호를 고른다", () => {
-    const fields = [line("스타벅스 서현점", 0), line("성남시 분당구 황새울로", 40), line("123-45-67890", 80)];
+    const fields = linesToFields(["스타벅스 서현점", "성남시 분당구 황새울로", "123-45-67890"]);
     expect(extract(fields).merchant).toBe("스타벅스 서현점");
     expect(extract(fields).weak).toContain("merchant");
   });
 
   it("3-2-5 모양의 영수번호를 사업자번호로 착각해 그 윗줄을 상호로 고르지 않는다", () => {
-    const fields = [
-      line("담당 이영희", 0),
-      line("No 001-22-33444", 40),
-      line("행복식당", 80),
-      line("123-45-67890", 120),
-    ];
+    const fields = linesToFields(["담당 이영희", "No 001-22-33444", "행복식당", "123-45-67890"]);
     expect(extract(fields).merchant).toBe("행복식당"); // 'No 001-22-33444' 도 '담당 이영희' 도 아니다
+    expect(extract(fields).weak).toContain("merchant");
+  });
+
+  it("영수번호 줄의 두 글자짜리 영문 말머리를 상호로 돌려주지 않는다", () => {
+    // "No 001-22-33444" 에서 번호를 지우면 'No' 만 남는다. 상호가 아니라 말머리다.
+    expect(merchantFromLine(asLine("No 001-22-33444"))).toBeNull();
+    expect(merchantOk("No")).toBe(false);
+  });
+});
+
+describe("상호 규칙 (c) 의 확신: 앵커 줄에 다른 것이 섞였는지로 가른다", () => {
+  // 라벨이 있다는 사실은 그 줄이 사업자번호 줄임을 말할 뿐, 윗줄이 상호임을 보장하지 않는다.
+  // 실제로 표 머리글·상호 칸이 더 붙은 줄 위에서 안내문·표어를 확신하며 집어 갔다.
+
+  it("라벨과 번호뿐인 깨끗한 줄이면 그 윗줄을 확신한다", () => {
+    const fields = linesToFields(["행복식당", "사업자등록번호 123-45-67890"]);
+    expect(extract(fields).merchant).toBe("행복식당");
+    expect(extract(fields).weak).not.toContain("merchant");
+  });
+
+  it("같은 줄에 상호 칸이 더 붙어 있으면 확신하지 않는다", () => {
+    const fields = linesToFields(["행복식당", "사업자등록번호 123-45-67890 상 호"]);
+    expect(extract(fields).merchant).toBe("행복식당");
+    expect(extract(fields).weak).toContain("merchant");
+  });
+
+  it("앵커 줄이 표 머리글이면 확신하지 않는다", () => {
+    // 배달앱 영수증에 실제로 있는 줄이다. 윗줄은 상호가 아니라 배달 플랫폼 법인명이었다.
+    const fields = linesToFields(["(주)우아한형제들 김범준", "사업자등록번호 가맹점 전화번호"]);
     expect(extract(fields).weak).toContain("merchant");
   });
 });
@@ -168,19 +192,19 @@ describe("merchantOk: 거름망이 멀쩡한 상호를 버리지 않는다", () 
 
 describe("weak", () => {
   it("합계·총액 같은 낱말 없이 가장 큰 숫자로 고른 금액은 확신하지 않는다", () => {
-    const noKeyword = [line("아메리카노 4,500", 0), line("케이크 7,000", 40)];
+    const noKeyword = linesToFields(["아메리카노 4,500", "케이크 7,000"]);
     expect(extract(noKeyword).amount).toBe(7000); // 최댓값 규칙으로 떨어진다
     expect(extract(noKeyword).weak).toContain("amount");
   });
 
   it("합계 줄에서 고른 금액은 확신한다", () => {
-    const keyed = [line("아메리카노 4,500", 0), line("합계: 4,500원", 40)];
+    const keyed = linesToFields(["아메리카노 4,500", "합계: 4,500원"]);
     expect(extract(keyed).amount).toBe(4500);
     expect(extract(keyed).weak).not.toContain("amount");
   });
 
   it("시각을 못 찾아 자정으로 채우면 확신하지 않는다", () => {
-    const dateOnly = [line("거래일시: 2026-09-04", 0)];
+    const dateOnly = linesToFields(["거래일시: 2026-09-04"]);
     expect(extract(dateOnly).paidAt).toBe("2026-09-04T00:00:00+09:00");
     expect(extract(dateOnly).weak).toContain("paidAt");
   });
@@ -208,22 +232,6 @@ describe("linesFromFields", () => {
     expect(texts).toHaveLength(25);
   });
 });
-
-/** 한 줄짜리 가짜 조각. weak 규칙만 보려고 최소한으로 만든다. */
-function line(text: string, top: number) {
-  return {
-    inferText: text,
-    lineBreak: true,
-    boundingPoly: {
-      vertices: [
-        { x: 0, y: top },
-        { x: 400, y: top },
-        { x: 400, y: top + 30 },
-        { x: 0, y: top + 30 },
-      ],
-    },
-  };
-}
 
 describe("merchantOk: '…스시'·'…장군' 상호를 주소로 오인하지 않는다", () => {
   // ADDRESS_FULL 의 첫 토막이 '한글 2자 이상 + 시/군' 이라 '회전스시'·'이순신장군' 이 지명으로 읽혔다.
@@ -307,6 +315,26 @@ describe("라벨로 상호 뽑기: 콜론이 없어도, 자간 공백이 있어�
       "여신금융협회",
     ]);
     expect(extract(fields).merchant).toBeNull();
+  });
+});
+
+describe("merchantOk: 인사말·안내 문구를 상호로 받지 않는다", () => {
+  // 앵커가 없어 맨 위 줄에서 찾는 (d) 경로가 이것들을 상호로 집어 갔다. 전부 weak 라 조용히
+  // 틀리지는 않지만, 그럴듯하게 틀린 값은 사용자가 그대로 저장한다.
+  const drop = [
+    "감사합니다", "또 오세요", "안녕히 가세요", "이용해 주셔서 감사합니다",
+    "고객님", "교환·환불 안내", "반품 및 교환 안내", "포인트 적립", "적립되었습니다",
+    "고객", "안내",
+  ];
+  // '감사'·'고객' 은 상호에도 쓰인다. 그 말뿐인 단독 문장일 때만 걸러야 한다.
+  const keep = ["감사식당", "감사떡볶이", "고객만족센터", "고객사랑치과", "또오시오분식"];
+
+  it.each(drop)("상호로 받지 않는다: %s", (v) => expect(merchantOk(v)).toBe(false));
+  it.each(keep)("상호로 받는다: %s", (v) => expect(merchantOk(v)).toBe(true));
+
+  it("맨 위 줄이 인사말이면 건너뛰고 그 아래 상호를 쓴다", () => {
+    const fields = linesToFields(["감사합니다", "또 오세요", "행복분식", "아메리카노 4,500"]);
+    expect(extract(fields).merchant).toBe("행복분식");
   });
 });
 
