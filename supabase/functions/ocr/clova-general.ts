@@ -93,6 +93,11 @@ const looksAddress = (v: string): boolean => ADDRESS.test(v) || ADDRESS_FULL.tes
 const MERCHANT_ROLE = /(^|\s)(대표|사장|점장|담당|계산원)(\s*[:：]\s*|\s+)[가-힣]{2,5}(\s|$)/;
 
 const squash = (s: string): string => s.replace(/\s+/g, '');
+// "대 표 자 명" 처럼 한 글자씩 벌려 찍은 자간 공백을 도로 붙인다. 안 붙이면 MERCHANT_BAD 의
+// '대표자'·'상품' 같은 낱말이 통째로 빗나가 안내문·표 머리글이 상호로 올라온다.
+// 한 글자짜리 토막이 셋 이상 이어질 때만 붙이므로 '김사장네 곱창' 같은 상호는 그대로 둔다.
+const deKern = (v: string): string =>
+  v.replace(/(^|\s)(\S(?: \S){2,})/g, (_m, head: string, run: string) => head + run.replace(/ /g, ''));
 const pad = (n: number): string => String(n).padStart(2, '0');
 
 function box(field: OcrField) {
@@ -256,22 +261,26 @@ const NOT_MERCHANT_WORD = /^\[[^\]]*\]$|^\(?(?:TEL|Tel|T)[.:)]|(?:\d[^\d]*){3}|^
 const hasHangul = (s: string): boolean => /[가-힣]/.test(s);
 
 /**
- * 한 줄을 가로로 벌어진 자리에서 토막 낸다.
- * 기준은 findMerchant (b) 와 같은 '글자 높이의 2배' 다 — 두 곳이 어긋나면 안 된다.
+ * 낱말마다 몇 번째 토막에 드는지. 가로로 글자 높이의 2배 넘게 벌어지면 다음 토막으로 본다.
+ * 기준은 findMerchant (b) 와 같아야 한다 — 두 곳이 어긋나면 안 된다.
  */
+function segmentIndex(line: Line): number[] {
+  let n = 0;
+  return line.words.map((w, i) => {
+    const prev = line.words[i - 1];
+    if (prev && w.left - prev.right >= Math.max(prev.height, w.height) * 2) n += 1;
+    return n;
+  });
+}
+
+/** 한 줄을 가로로 벌어진 자리에서 토막 낸다. */
 function segments(line: Line): string[] {
+  const seg = segmentIndex(line);
   const out: string[] = [];
-  let cur: Word[] = [];
-  const flush = () => {
-    if (cur.length) out.push(cur.map((w) => w.text).join(' '));
-    cur = [];
-  };
-  for (const w of line.words) {
-    const prev = cur[cur.length - 1];
-    if (prev && w.left - prev.right >= Math.max(prev.height, w.height) * 2) flush();
-    cur.push(w);
-  }
-  flush();
+  line.words.forEach((w, i) => {
+    if (i > 0 && seg[i] === seg[i - 1]) out[out.length - 1] += ' ' + w.text;
+    else out.push(w.text);
+  });
   return out;
 }
 
@@ -306,6 +315,31 @@ export function merchantFromLine(line: Line): string | null {
   return null;
 }
 
+// 상호를 가리키는 라벨. 자간 공백을 지운 뒤 비교하므로 '상  호'·'가 맹 점 명' 도 걸린다.
+// 낱말 하나가 통째로 라벨일 때만 인정한다 — 뒤에 다른 글자가 붙으면 라벨이 아니다.
+// 그래야 VAN 안내 문구 "가맹점명/주소가 실제와 다른경우" 가 라벨로 읽히지 않는다.
+const MERCHANT_LABEL =
+  /^(?:가맹점명|가맹점|상호|매장|점명|영화관|주문매장|판매자상호|공급자상호|법인명)(?:\(.*\))?[:：]?$/;
+// 값을 어디서 끊을지. 다음 라벨이 시작되면 거기까지가 상호다.
+const NEXT_LABEL = new RegExp(
+  '^(?:성명|대표자명|대표자|사업자등록번호|사업자번호|사업자|사업장소재지|사업장|소재지|' +
+    '전화번호|전화|주소|업태|종목|발행일|승인번호|거래일시)(?:\(.*\))?[:：]?$',
+);
+
+/**
+ * 낱말 i 부터 라벨 하나를 읽는다. 읽었으면 값이 시작하는 자리를, 아니면 -1.
+ * 가장 길게 걸리는 쪽을 쓴다 — '가 맹 점 명:' 이 '가맹점' 에서 멈추면 값이 '명: …' 이 된다.
+ */
+function labelEnd(words: string[], i: number, re: RegExp): number {
+  let acc = '';
+  let end = -1;
+  for (let j = i; j < words.length && j < i + 4; j++) {
+    acc += squash(words[j]);
+    if (re.test(acc)) end = j + 1;
+  }
+  return end;
+}
+
 /** 상호로 쓸 만한 글자인지. 아니면 비워 두는 편이 낫다. (테스트에서 직접 부른다) */
 export function merchantOk(text: string): boolean {
   const v = text.trim();
@@ -313,16 +347,57 @@ export function merchantOk(text: string): boolean {
   if (/[[\]]/.test(v)) return false; // "[고객용]" 같은 말머리
   if (/\d{3}/.test(v)) return false; // 번호·금액이 섞인 줄
   if ((v.match(/[가-힣A-Za-z]/g) ?? []).length < 2) return false;
-  return !looksAddress(v) && !MERCHANT_BAD.test(v) && !MERCHANT_ROLE.test(v);
+  // 자간 공백을 붙인 꼴로도 한 번 더 본다.
+  return [v, deKern(v)].every((x) => !looksAddress(x) && !MERCHANT_BAD.test(x) && !MERCHANT_ROLE.test(x));
+}
+
+/** 라벨이 가리키는 상호를 뽑는다. 없으면 null. */
+function labelledMerchant(line: Line): string | null {
+  // 콜론에서 한 번 더 쪼갠다. "상호:동대문마트" 처럼 라벨과 값이 한 낱말로 붙어 나오기 때문이다.
+  const words: string[] = [];
+  const seg: number[] = [];
+  const idx = segmentIndex(line);
+  line.words.forEach((w, i) =>
+    w.text.split(/([:：])/).forEach((part) => {
+      if (part === '') return;
+      words.push(part);
+      seg.push(idx[i]);
+    }),
+  );
+
+  for (let i = 0; i < words.length; i++) {
+    const end = labelEnd(words, i, MERCHANT_LABEL);
+    if (end < 0 || end >= words.length) continue;
+
+    // 콜론은 라벨 낱말 끝에 붙거나 값 앞에 따로 찍힌다("상  호 : 값").
+    const colon = /[:：]/.test(words.slice(i, end).join('')) || /^[:：]$/.test(words[end]);
+    let v = end;
+    if (/^[:：]$/.test(words[v])) v += 1; // 콜론만 따로 떨어진 낱말
+    if (v >= words.length) continue;
+    if (!colon && seg[v] === seg[end - 1]) continue; // 콜론이 없으면 가로로 떨어져 있어야 한다
+
+    // 값은 줄 끝까지가 아니라 다음 라벨이나 다음 토막 앞까지다.
+    const take: string[] = [];
+    for (let j = v; j < words.length && seg[j] === seg[v]; j++) {
+      if (j > v && labelEnd(words, j, NEXT_LABEL) > 0) break;
+      take.push(words[j]);
+    }
+    const value = take.join(' ').trim();
+    if (value && merchantOk(value)) return value;
+  }
+  return null;
 }
 
 /** sure=false 면 라벨 없는 번호 줄 위라는 자리만 보고 고른 값이라 확신이 없다. */
 function findMerchant(lines: Line[]): { value: string | null; sure: boolean } {
-  // (a) "상호:" / "가맹점명:" 라벨 값. 콜론이 있어야 한다 — 콜론을 안 따지면 VAN 안내 문구
-  //     "가맹점명/주소가 실제와 다른경우" 가 통째로 상호로 잡힌다.
+  // (a) "상호:" / "가맹점명:" 같은 라벨의 값.
+  //     콜론은 선택이다 — 표 칸이라 "상  호   열매약국" 처럼 공백으로만 떨어진 영수증이 많다.
+  //     다만 콜론이 없으면 라벨 토막과 값 토막이 가로로 떨어져 있을 때만 인정한다.
+  //     값은 줄 끝까지가 아니라 다음 라벨이나 다음 토막 앞까지만 자른다
+  //     ("상호: 두리이비인후과    대표자: 홍정주" 에서 '두리이비인후과' 만).
   for (const l of lines) {
-    const m = l.text.match(/(?:가맹점\s*명|상\s*호)\s*[:：]\s*(.+)$/);
-    if (m && merchantOk(m[1])) return { value: m[1].trim(), sure: true };
+    const v = labelledMerchant(l);
+    if (v) return { value: v, sure: true };
   }
 
   // (c) 사업자번호 줄 바로 위 줄. POS 영수증은 제목 / 상호 / 사업자번호 순서로 찍힌다.
