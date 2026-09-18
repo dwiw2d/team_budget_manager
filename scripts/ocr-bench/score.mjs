@@ -5,6 +5,11 @@
 // 사용법: node scripts/ocr-bench/score.mjs [--json]
 //   카탈로그 위치는 RECEIPT_CORPUS_DIR 로 바꿀 수 있다(기본 .local/receipt-corpus).
 //
+// 채점기 자체의 단위 테스트: node --test "scripts/ocr-bench/lib/*.test.mjs"
+//   글로브를 따옴표로 묶어 Node 가 직접 펼치게 해라. Node 24 는
+//   `node --test scripts/ocr-bench/lib/` 처럼 디렉터리를 주면 그 디렉터리를 테스트 모듈로
+//   읽으려다 'test failed' 로 끝난다(v24.14.0 확인).
+//
 // 합성 입력의 한계는 lib/synth-fields.mjs 맨 위 주석 참고. 여기서 나오는 숫자는
 // "파서 규칙이 이 판형을 다루는가"이지 "실제 사진으로 얼마나 맞히는가"가 아니다.
 import { existsSync, readFileSync } from 'node:fs';
