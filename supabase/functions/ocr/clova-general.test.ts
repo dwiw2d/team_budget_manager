@@ -477,3 +477,40 @@ describe("merchantOk 문턱: 앞 단계를 다 고친 뒤에 푼 것들", () => 
     expect(extract(fields).merchant).toBe("여의도KBS 파리바게트");
   });
 });
+
+describe("merchantOk: 라벨이 가리킨 값은 인사말 거름망과 두 글자 규칙을 면제한다", () => {
+  // 이 둘은 앵커가 없어 자리로 추측하는 (d) 경로에서 쓰라고 만든 것이다. 라벨은 사람이
+  // "여기가 상호다" 라고 명시한 것이라 그 위에서 또 거르면 멀쩡한 상호를 버린다.
+  const labelledOnly = [
+    // '…세요'·'…니다' 가 든 상호
+    "또오세요분식", "어서오세요마트", "드세요분식", "오세요네과일", "행복하세요약국",
+    "맛있습니다식당", "감사합니다",
+    // 안내 낱말이 앞글자로 들어간 상호
+    "교환역국밥", "교환학생카페", "교환다리설렁탕", "환불없는집", "환불맛집",
+    "적립왕고기", "적립왕치킨", "적립의민족", "반품천국",
+    // 단독 문장으로는 안내문이지만 라벨이 가리키면 상호다
+    "감사", "고객", "고객님", "안내",
+    // 한글 없는 두 글자 브랜드
+    "CU", "KT", "SK", "No",
+  ];
+
+  it.each(labelledOnly)("라벨 없으면 버리고, 라벨이 가리키면 받는다: %s", (v) => {
+    expect(merchantOk(v)).toBe(false);
+    expect(merchantOk(v, true)).toBe(true);
+  });
+
+  it("두 글자 브랜드를 라벨과 함께 돌려준다 — 라벨 글자가 섞이지 않는다", () => {
+    expect(extract(linesToFields(["상호: CU", "합계 10,000원"])).merchant).toBe("CU");
+    expect(extract(linesToFields(["가맹점명: KT", "합계 10,000원"])).merchant).toBe("KT");
+  });
+
+  it("라벨이 가리킨 인사말꼴 상호를 돌려준다", () => {
+    expect(extract(linesToFields(["상호: 또오세요분식", "합계 10,000원"])).merchant).toBe("또오세요분식");
+    expect(extract(linesToFields(["상호: 적립왕치킨", "합계 10,000원"])).merchant).toBe("적립왕치킨");
+  });
+
+  it("라벨이 없으면 맨 위 줄의 안내문을 여전히 건너뛴다", () => {
+    const fields = linesToFields(["또 오세요", "포인트 적립", "행복분식", "아메리카노 4,500"]);
+    expect(extract(fields).merchant).toBe("행복분식");
+  });
+});

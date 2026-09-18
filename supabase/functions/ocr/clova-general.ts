@@ -413,14 +413,21 @@ export function merchantOk(text: string, labelled = false): boolean {
   if (v.length < 2 || v.length > 25) return false;
   // 두 글자짜리 영문 토막은 상호가 아니라 말머리다. "No 001-22-33444" 의 'No' 가 그래서
   // 영수번호 줄을 상호로 통과시켰다. 한글이 든 두 글자('1호'·'본점')는 그대로 둔다.
-  if (v.length === 2 && !hasHangul(v)) return false;
+  // 라벨이 가리킨 값은 면제한다 — 'CU'·'KT' 처럼 두 글자인 진짜 브랜드가 있다.
+  if (!labelled && v.length === 2 && !hasHangul(v)) return false;
   if (/[[\]]/.test(v)) return false; // "[고객용]" 같은 말머리
   if (!labelled && /\d{3}/.test(v)) return false; // 번호·금액이 섞인 줄
   if ((v.match(/[가-힣A-Za-z]/g) ?? []).length < 2) return false;
-  if (NOTICE_ALONE.test(squash(v))) return false;
+  // 인사말·안내 문구 거름망은 앵커가 없어 자리로 추측할 때 쓰라고 만든 것이다. 라벨은 사람이
+  // "여기가 상호다" 라고 명시한 것이므로 그 위에서 또 거르면 '또오세요분식' 같은 상호를 버린다.
+  if (!labelled && NOTICE_ALONE.test(squash(v))) return false;
   // 자간 공백을 붙인 꼴로도 한 번 더 본다.
   return [v, deKern(v)].every(
-    (x) => !looksAddress(x) && !MERCHANT_BAD.test(x) && !MERCHANT_ROLE.test(x) && !NOTICE.test(x),
+    (x) =>
+      !looksAddress(x) &&
+      !MERCHANT_BAD.test(x) &&
+      !MERCHANT_ROLE.test(x) &&
+      (labelled || !NOTICE.test(x)),
   );
 }
 
