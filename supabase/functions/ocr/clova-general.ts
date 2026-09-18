@@ -350,20 +350,37 @@ function findPaidAt(lines: Line[]): { value: string | null; hasTime: boolean } {
   return { value: `${best.date}T${time ?? '00:00:00'}+09:00`, hasTime: time !== null };
 }
 
+// 한 영수증에 카드번호가 둘 있을 때 어느 쪽이 결제 카드인지 가르는 말머리.
+// 결제한 카드는 '신용카드 매출전표' 아래에 찍히고, 제휴할인 카드나 포인트 적립 카드는
+// 제 블록 안에 따로 찍힌다. 후자는 그 카드로 돈을 낸 것이 아니다.
+const CARD_SLIP = /신용카드|체크카드|직불카드/;
+const CARD_NOT_PAYMENT = /제휴|포인트|적립|멤버십/;
+
+/** 카드번호 앞 두 줄까지 보고 결제 전표 쪽이면 +1, 제휴·적립 블록 쪽이면 -1. */
+function cardContext(lines: Line[], i: number): number {
+  const near = lines.slice(Math.max(0, i - 2), i + 1).map((l) => l.text).join(' ');
+  return (CARD_SLIP.test(near) ? 1 : 0) - (CARD_NOT_PAYMENT.test(near) ? 1 : 0);
+}
+
 function findCardNumber(lines: Line[]): string | null {
   let best: string | null = null;
   let bestScore = 0;
-  for (const l of lines) {
-    if (NOT_CARD.test(l.text)) continue;
+  let bestContext = 0;
+  lines.forEach((l, i) => {
+    if (NOT_CARD.test(l.text)) return;
     for (const raw of l.text.match(/[0-9*][0-9*\-]{10,}[0-9*]/g) ?? []) {
       const digits = raw.replace(/[^0-9*]/g, '').length;
       const score = raw.includes('*') ? 2 : digits === 16 ? 1 : 0;
-      if (score > bestScore) {
+      const context = cardContext(lines, i);
+      // 점수가 같으면 말머리로 가른다. 점수가 같은 후보가 둘일 때 먼저 나온 것을 집으면
+      // 제휴카드·포인트 카드 번호가 뽑힌다 — 결제 전표는 보통 영수증 아래쪽에 다시 찍힌다.
+      if (score > bestScore || (score === bestScore && score > 0 && context > bestContext)) {
         best = raw;
         bestScore = score;
+        bestContext = context;
       }
     }
-  }
+  });
   return best;
 }
 
