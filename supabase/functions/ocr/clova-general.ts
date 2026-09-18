@@ -185,6 +185,13 @@ export function linesFromFields(fields: OcrField[]): Line[] {
   });
 }
 
+function lastNumber(text: string): number | null {
+  const hits = text.match(KRW);
+  if (!hits) return null;
+  const n = Number(hits[hits.length - 1].replace(/,/g, ''));
+  return Number.isFinite(n) ? n : null;
+}
+
 /** 칸의 마지막 숫자를 금액으로 읽는다. 100 미만이면 금액이 아니라고 본다. */
 function money(text: string): number | null {
   const n = lastNumber(text);
@@ -202,14 +209,6 @@ function cellAmount(text: string): number | null {
   const boxed = text.trim();
   return DIGIT_BOXES.test(boxed) ? money(boxed.replace(/ /g, '')) : null;
 }
-
-function lastNumber(text: string): number | null {
-  const hits = text.match(KRW);
-  if (!hits) return null;
-  const n = Number(hits[hits.length - 1].replace(/,/g, ''));
-  return Number.isFinite(n) ? n : null;
-}
-
 
 /**
  * 라벨 등급. 라벨이 없으면 -1. 여러 등급이 섞이면 높은 쪽을 따른다.
