@@ -9,6 +9,7 @@ import {
   RECEIPT_SCHEMA,
   RETRY_DELAYS_MS,
   shouldRetry,
+  TIMEOUT_MS,
 } from "./gemini.ts";
 import {
   blocked,
@@ -82,17 +83,23 @@ it("프롬프트가 가맹점·총액 함정을 짚는다", () => {
 });
 
 describe("shouldRetry", () => {
-  it("503·500 은 모델 과부하라 다시 부른다", () => {
-    expect(shouldRetry(503)).toBe(true);
-    expect(shouldRetry(500)).toBe(true);
+  it("5xx 는 모델이 일을 하지 않은 일시 실패라 다시 부른다(시간 초과 갈래인 504 포함)", () => {
+    for (const status of [500, 502, 503, 504]) expect(shouldRetry(status)).toBe(true);
   });
 
   it("429·400·401 은 다시 불러도 소용없다", () => {
-    for (const status of [429, 400, 401, 403, 404]) expect(shouldRetry(status)).toBe(false);
+    for (const status of [400, 401, 403, 404, 429]) expect(shouldRetry(status)).toBe(false);
   });
 
   it("재시도는 최대 2회 추가다(총 3회)", () => {
     expect(RETRY_DELAYS_MS).toHaveLength(2);
+  });
+
+  it("2단계 최악 시간이 무료 요금제 wall clock 한도 안에 남는다", () => {
+    const worstMs = TIMEOUT_MS * (RETRY_DELAYS_MS.length + 1) + RETRY_DELAYS_MS.reduce((a, b) => a + b, 0);
+
+    expect(worstMs).toBe(79_000); // 25초 × 3회 + 대기 (1+3)초
+    expect(worstMs + 20_000).toBeLessThan(150_000); // + CLOVA 1단계 20초 < 150초(Supabase Functions Limits)
   });
 });
 

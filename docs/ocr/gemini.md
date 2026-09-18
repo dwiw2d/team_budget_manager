@@ -112,13 +112,20 @@ https://ai.google.dev/gemini-api/docs/pricing (100만 토큰당)
 | `gemini-3.5-flash` | 1 | 503 UNAVAILABLE | 4.8초 |
 | `gemini-3.5-flash` | 2 | **200 — 네 필드 정확히 인식** | 13.5초 |
 
-즉 **다시 부르면 되고, 한 모델이 계속 막히면 다른 모델은 통한다.** Edge Function 은 503·500 을
+즉 **다시 부르면 되고, 한 모델이 계속 막히면 다른 모델은 통한다.** Edge Function 은 5xx 를
 일시적 실패로 보고 최대 2회 더 부르며(대기 1초 → 3초) 시도마다 모델을 갈아탄다
 (`GEMINI_MODEL` → `gemini-3.5-flash` → `gemini-flash-latest`). 이 판단은 `supabase/functions/ocr/gemini.ts`
 의 순수 함수 `shouldRetry(status)`·`modelChain(envModel)` 에 있다. 이 키로 쓸 수 있는 모델은
-`gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-flash-latest`, `gemini-2.5-flash` 로 확인됐다.
+`gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-flash-latest`, `gemini-2.5-flash` 로 확인됐다 —
+`gemini-2.5-flash` 가 신규 사용자에게는 404 로 막힌다는 말이 있으나 **공식 근거를 찾지 못했다(미확인)**.
+그래서 기본 모델은 `gemini-3.6-flash` 로 두었다.
 
-503 으로만 끝나면 모델이 일을 하나도 하지 않은 것이므로 선차감한 무료 한도 1건을
+위 표의 32.0초처럼 한 호출이 길어질 수 있으므로 Gemini 호출마다 25초 상한을 건다
+(`AbortSignal.timeout`). 무료 요금제의 Edge Function 은 wall clock 150초를 넘기면 통째로 끊기고
+(https://supabase.com/docs/guides/functions/limits) 끊기면 환불도 못 하기 때문이다. 예산은
+CLOVA 20초 + Gemini 25초 × 3 + 대기 4초 = 최악 99초다.
+
+5xx 나 시간 초과로만 끝나면 모델이 일을 하나도 하지 않은 것이므로 선차감한 무료 한도 1건을
 `ocr_quota_refund` 로 되돌린다(`0010_ocr_quota_refund.sql`). 429 는 진짜로 쓴 것이라 되돌리지 않는다.
 
 ## 5. 무료 등급의 데이터 정책 — 영수증에는 개인정보가 들어 있다
