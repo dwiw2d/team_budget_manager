@@ -77,6 +77,8 @@ const MERCHANT_BAD = new RegExp([
 ].join('|'), 'i');
 // 사업자등록번호 모양. 라벨 없이 번호만 찍는 영수증이 많다.
 const BIZNO = /\b\d{3}-\d{2}-\d{5}\b/;
+// 번호 모양이 아니어도 라벨만으로 자리를 알 수 있다("사업자등록번호:7436000775").
+const BIZNO_LABEL = /사업자(등록)?번호/;
 const ADDRESS = /^(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)/;
 // ADDRESS 는 시/도 이름으로 '시작'하는 주소만 거른다. "성남시 분당구 황새울로" 처럼 시/도가 빠진
 // 주소도 상호 자리에 올라오므로 하나 더 본다. 단 '…동/…로/…길' 로 끝나는 토막은 세지 않는다 —
@@ -256,8 +258,12 @@ function findCardNumber(lines: Line[]): string | null {
 
 /** 괄호로 묶은 번호. "CGV 광양(104-81-45690)" 의 꼬리를 뗀다. */
 const PAREN_NUMBER = /\(\s*[\d\s*.-]{3,}\)/g;
-// 토막 안에서 상호가 아닌 낱말: 대괄호 말머리·마스킹, 전화 접두, 숫자 3자리 이상, 기호뿐인 낱말.
-const NOT_MERCHANT_WORD = /^\[[^\]]*\]$|^\(?(?:TEL|Tel|T)[.:)]|(?:\d[^\d]*){3}|^[^가-힣A-Za-z]+$/;
+// 토막 안에서 상호가 아닌 낱말: 대괄호 말머리·마스킹, 전화 접두, 기호뿐인 낱말.
+// 기호뿐인 낱말에서 숫자는 뺀다 — 숫자를 여기서 버리면 "No 001-22-33444" 가 "No" 로 줄어
+// 영수번호 줄이 상호로 통과한다. 숫자는 아래 NOT_MERCHANT_WORD 에서만 버린다.
+const NOT_MERCHANT_PLAIN = /^\[[^\]]*\]$|^\(?(?:TEL|Tel|T)[.:)]|^[^가-힣A-Za-z0-9]+$/;
+// 숫자 3자리 이상인 낱말: 전화번호·사업자번호·바코드.
+const NOT_MERCHANT_NUMBER = /(?:\d[^\d]*){3}/;
 const hasHangul = (s: string): boolean => /[가-힣]/.test(s);
 
 /**
@@ -284,13 +290,17 @@ function segments(line: Line): string[] {
   return out;
 }
 
-/** 토막에서 상호가 아닌 낱말을 지운다. 남는 것이 없으면 빈 문자열. */
-function cleanMerchant(seg: string): string {
+/**
+ * 토막에서 상호가 아닌 낱말을 지운다. 남는 것이 없으면 빈 문자열.
+ * dropNumbers 는 '숫자 3자리 이상인 낱말'까지 버릴지다. 줄이 한 칸뿐이면 끄고 부른다 —
+ * 켜 두면 "강남구 압구정로 165" 에서 번지만 빠져 주소가 상호로 통과한다.
+ */
+function cleanMerchant(seg: string, dropNumbers: boolean): string {
   return seg
     .split(/\s+/)
     .filter(Boolean)
     .map((w) => w.replace(PAREN_NUMBER, ''))
-    .filter((w) => w && !NOT_MERCHANT_WORD.test(w))
+    .filter((w) => w && !NOT_MERCHANT_PLAIN.test(w) && !(dropNumbers && NOT_MERCHANT_NUMBER.test(w)))
     .join(' ');
 }
 
@@ -309,10 +319,33 @@ export function merchantFromLine(line: Line): string | null {
   const korean = segs.some(hasHangul);
   for (const seg of segs) {
     if (korean && !hasHangul(seg)) continue;
-    const v = cleanMerchant(seg);
+    const v = cleanMerchant(seg, segs.length > 1);
     if (v && merchantOk(v)) return v.trim();
   }
   return null;
+}
+
+/**
+ * 사업자번호가 상호와 같은 줄일 때, 그 번호가 든 칸의 왼쪽을 상호로 본다.
+ * "이마트 탄현점 128-85-48537 대표: 최병훈" -> "이마트 탄현점".
+ * 번호가 제 칸의 맨 앞이면(= 왼쪽이 비었으면) 아무것도 돌려주지 않는다 —
+ * "손은주   669-56-00790" 의 대표자 이름을 상호로 집는 것을 막는다.
+ */
+function merchantBeforeBizno(line: Line): string | null {
+  const at = line.words.findIndex((w) => BIZNO.test(w.text));
+  if (at < 0) return null;
+  const seg = segmentIndex(line);
+  let from = at;
+  while (from > 0 && seg[from - 1] === seg[at]) from -= 1;
+  if (from === at) return null; // 번호가 제 칸의 맨 앞이다
+  const text = line.words
+    .slice(from, at + 1)
+    .map((w) => w.text)
+    .join(' ')
+    .replace(PAREN_NUMBER, '')
+    .replace(new RegExp(BIZNO.source, 'g'), '');
+  const v = cleanMerchant(text, false);
+  return v && merchantOk(v) ? v.trim() : null;
 }
 
 // 상호를 가리키는 라벨. 자간 공백을 지운 뒤 비교하므로 '상  호'·'가 맹 점 명' 도 걸린다.
@@ -409,10 +442,16 @@ function findMerchant(lines: Line[]): { value: string | null; sure: boolean } {
   //     찾은 줄은 영수번호 같은 다른 번호일 수 있고("No 001-22-33444") 윗줄도 상호가 아닐 때가
   //     많다. 그래서 숫자 모양으로 찾았으면 확신하지 않는다(sure=false) — 2단계 Gemini 가
   //     교차 확인하고 화면에도 "확인해 주세요" 가 뜬다.
-  const i = lines.findIndex((l) => squash(l.text).includes('사업자번호') || BIZNO.test(l.text));
-  if (i > 0) {
-    const above = merchantFromLine(lines[i - 1]);
-    if (above) return { value: above, sure: squash(lines[i].text).includes('사업자번호') };
+  const i = lines.findIndex((l) => BIZNO_LABEL.test(squash(l.text)) || BIZNO.test(l.text));
+  if (i >= 0) {
+    const labelled = BIZNO_LABEL.test(squash(lines[i].text));
+    // 사업자번호가 상호와 같은 줄일 수도 있다. 윗줄보다 먼저 본다.
+    const same = merchantBeforeBizno(lines[i]);
+    if (same) return { value: same, sure: labelled };
+    if (i > 0) {
+      const above = merchantFromLine(lines[i - 1]);
+      if (above) return { value: above, sure: labelled };
+    }
   }
 
   // (b) 대표자/TEL 이 있는 줄의 오른쪽 끝 토막. 위쪽이 VAN 안내 문구로 덮인 카드 승인전표는
@@ -424,8 +463,22 @@ function findMerchant(lines: Line[]): { value: string | null; sure: boolean } {
     if (segs.length < 2) continue; // 가로로 확 떨어져 있어야 오른쪽 단으로 본다
     const last = segs[segs.length - 1];
     if (last === l.text.match(/대표자\s*[:：]?\s*(\S+)/)?.[1]) continue; // 대표자 이름은 상호가 아니다
-    const v = cleanMerchant(last);
+    const v = cleanMerchant(last, true);
     if (v && merchantOk(v)) return { value: v.trim(), sure: true };
+  }
+
+  // (c2) 사업자번호 줄과 상호 사이에 로고·주소·전화가 끼어 있는 영수증. 위로 더 올라가 본다.
+  //      상한을 두지 않으면 엉뚱한 줄까지 올라가 오탐이 난다. 자리만 보고 고른 값이라 확신하지 않는다.
+  for (let up = 2; up <= 3 && i - up >= 0; up += 1) {
+    const v = merchantFromLine(lines[i - up]);
+    if (v) return { value: v, sure: false };
+  }
+
+  // (d) 라벨도 사업자번호도 없는 간이 영수증(배달앱 화면, 모바일 영수증). 맨 위 몇 줄에서 찾는다.
+  //     확신은 못 하지만 비워 두는 것보다 낫다 — 2단계 Gemini 가 교차 확인하고 화면에도 표시된다.
+  for (const l of lines.slice(0, 4)) {
+    const v = merchantFromLine(l);
+    if (v) return { value: v, sure: false };
   }
 
   return { value: null, sure: false }; // 확신이 없으면 비워 둔다. Gemini 나 사용자가 채운다.

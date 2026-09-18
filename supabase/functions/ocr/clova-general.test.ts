@@ -112,17 +112,19 @@ describe("상호 규칙 (c) 의 weak 가 화면의 '확인해 주세요' 까지 
 
 describe("상호 규칙 (c): 자리만 보고 고른 값", () => {
   // 사업자번호 줄 '바로 윗줄'이 늘 상호인 것은 아니다. 아래 셋은 실제로 파서를 속였다.
-  // 틀린 값을 확신해서 내보내면 2단계 Gemini 보완도, 화면의 "확인해 주세요" 표시도 함께 닫힌다.
+  // 윗줄이 역할어·주소면 버리고 위로 더 올라가거나 맨 위 줄에서 찾는다. 다만 자리만 보고
+  // 고른 값이므로 확신하지 않는다 — weak 에 merchant 가 남아야 2단계 Gemini 보완도,
+  // 화면의 "확인해 주세요" 표시도 열린다. 절대 하면 안 되는 것은 '확신하면서 틀리는' 것이다.
 
-  it("윗줄이 '대표 <이름>' 이면 상호로 고르지 않는다", () => {
+  it("윗줄이 '대표 <이름>' 이면 그 이름 대신 그 위의 상호를 고른다", () => {
     const fields = [line("행복식당", 0), line("대표 홍길동", 40), line("123-45-67890", 80)];
-    expect(extract(fields).merchant).toBeNull();
+    expect(extract(fields).merchant).toBe("행복식당");
     expect(extract(fields).weak).toContain("merchant");
   });
 
-  it("윗줄이 시/도 이름 없이 시작하는 주소면 상호로 고르지 않는다", () => {
+  it("윗줄이 시/도 이름 없이 시작하는 주소면 그 주소 대신 그 위의 상호를 고른다", () => {
     const fields = [line("스타벅스 서현점", 0), line("성남시 분당구 황새울로", 40), line("123-45-67890", 80)];
-    expect(extract(fields).merchant).toBeNull();
+    expect(extract(fields).merchant).toBe("스타벅스 서현점");
     expect(extract(fields).weak).toContain("merchant");
   });
 
@@ -133,7 +135,7 @@ describe("상호 규칙 (c): 자리만 보고 고른 값", () => {
       line("행복식당", 80),
       line("123-45-67890", 120),
     ];
-    expect(extract(fields).merchant).toBeNull();
+    expect(extract(fields).merchant).toBe("행복식당"); // 'No 001-22-33444' 도 '담당 이영희' 도 아니다
     expect(extract(fields).weak).toContain("merchant");
   });
 });
@@ -317,5 +319,67 @@ describe("merchantOk: 자간 공백을 붙여 보고 한 번 더 거른다", () 
   it("벌려 찍은 진짜 상호는 그대로 받는다", () => {
     expect(merchantOk("윤 중 약 국")).toBe(true);
     expect(merchantOk("현 대 백 화 점")).toBe(true);
+  });
+});
+
+describe("상호 앵커 넓히기: 사업자번호가 같은 줄·먼 줄이거나 아예 없을 때", () => {
+  it("사업자번호가 상호와 같은 줄이면 그 번호가 든 칸의 왼쪽을 상호로 본다", () => {
+    const fields = linesToFields([
+      "대한민국 1등인 이마트",
+      "이마트 탄현점 128-85-48537 대표: 최병훈",
+      "고양시 일산구 덕이동 203-1 (031)927-1234",
+    ]);
+    expect(extract(fields).merchant).toBe("이마트 탄현점");
+  });
+
+  it("번호가 제 칸의 맨 앞이면 왼쪽이 비었으므로 상호로 삼지 않는다", () => {
+    // "손은주   669-56-00790  Tel:…" 의 대표자 이름을 상호로 집던 자리다.
+    const fields = linesToFields([
+      "첫걸음산부인과의원              TID:***2506093",
+      "손은주   669-56-00790  Tel:0220387375",
+    ]);
+    expect(extract(fields).merchant).toBe("첫걸음산부인과의원");
+  });
+
+  it("사업자번호 줄과 상호 사이에 로고·주소가 끼어 있으면 위로 더 올라간다", () => {
+    const fields = linesToFields([
+      "THE HYUNDAI",
+      "(주)현대백화점 압구정본점",
+      "강남구 압구정로 165",
+      "211-85-37633   대표이사: 정지영 외 1인",
+    ]);
+    expect(extract(fields).merchant).toBe("(주)현대백화점 압구정본점");
+    expect(extract(fields).weak).toContain("merchant"); // 자리만 보고 골랐다
+  });
+
+  it("세 줄보다 더 올라가지는 않는다", () => {
+    const fields = linesToFields([
+      "행복식당",
+      "안내문 한 줄",
+      "안내문 두 줄",
+      "안내문 세 줄",
+      "123-45-67890",
+    ]);
+    expect(extract(fields).merchant).not.toBe("행복식당");
+  });
+
+  it("번호 모양이 아니어도 '사업자등록번호' 라벨만으로 자리를 안다", () => {
+    const fields = linesToFields([
+      "CU (Again)",
+      "******* 최근영수증발행인쇄 *******",
+      "CU 개포스카이점",
+      "사업자등록번호:7436000775",
+    ]);
+    expect(extract(fields).merchant).toBe("CU 개포스카이점");
+  });
+
+  it("라벨도 사업자번호도 없으면 맨 위 몇 줄에서 찾되 확신하지 않는다", () => {
+    const fields = linesToFields([
+      "모바일 영수증",
+      "GS25성내동원점              024749333",
+      "이경희                      2752301295",
+    ]);
+    expect(extract(fields).merchant).toBe("GS25성내동원점");
+    expect(extract(fields).weak).toContain("merchant");
   });
 });
