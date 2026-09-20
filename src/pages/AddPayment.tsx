@@ -7,6 +7,7 @@ import { getOcrQuota, insertPayment, listCardBalances, uploadReceipt } from "../
 import { userMessage } from "../lib/errors";
 import { resizeToBlob, STORAGE_MAX_EDGE, STORAGE_QUALITY } from "../lib/image";
 import { OcrError, recognizeReceipt } from "../lib/ocr";
+import { PHOTO_PICKER_KEY } from "../lib/startup";
 import type { CardBalance, PaymentSource } from "../lib/types";
 
 interface Form {
@@ -193,12 +194,16 @@ export default function AddPayment() {
           <label
             className={`${quotaGone ? btnBlocked : `${btnSecondary} w-full cursor-pointer`} flex h-full items-center justify-center`}
             aria-disabled={quotaGone || undefined}
-            onClick={quotaGone
-              ? (e) => {
-                  e.stopPropagation(); // 아래 document 리스너가 곧바로 닫지 않도록
-                  setTip((v) => !v);
-                }
-              : undefined}
+            onClick={(e) => {
+              if (quotaGone) {
+                e.stopPropagation(); // 아래 document 리스너가 곧바로 닫지 않도록
+                setTip((v) => !v);
+                return;
+              }
+              // 파일 선택기가 뜨면 앱이 백그라운드로 간다. 돌아왔을 때 시작 관문이 화면을
+              // 새로 받아 고른 사진·입력값을 날리지 않게 표시를 남긴다.
+              sessionStorage.setItem(PHOTO_PICKER_KEY, "1");
+            }}
           >
             영수증 입력
             {/* 한도가 떨어지면 input 을 두지 않는다. 라벨만 남아 파일 선택 창이 열리지 않는다. */}

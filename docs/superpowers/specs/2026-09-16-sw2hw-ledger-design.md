@@ -178,7 +178,22 @@ return 삭제 건수;
 5. **카드 `/cards`**: 카드 목록(이름, 카드번호 앞자리, 예산, 잔액). 목록 위에는 "카드 추가" 버튼 하나만 둔다. 카드 추가/수정 모달(이름, 예산, 카드번호 앞자리 선택): 예산 입력 아래에 "예산을 바꾸면 다음 달 1일부터 적용됩니다" 를 작은 글씨로 우측 정렬해 둔다. 앞자리 입력의 라벨은 "카드번호 앞 6~8자리(선택)"이고 그 아래에 "영수증은 뒤 4자리를 가리므로 앞자리로 맞춥니다" 한 줄을 둔다. 숫자 6~8자리가 아니면 저장하지 않는다. 카드 상세 시트: 이름·카드번호 앞자리·예산·잔액을 보여주고 예산 아래에 같은 안내 한 줄을 우측 정렬해 둔다. 버튼은 "수정"·"삭제" 둘뿐이다(`grid-cols-2`). **초기화 버튼은 카드별도 전체도 없다** — 잔액은 매월 1일 0시에 저절로 채워진다. 삭제는 확인창 후 실행하고 FK 오류면 안내.
 6. **설정 `/settings`**: PIN 변경(현재 PIN·새 PIN·새 PIN 확인 3개 입력. 현재 PIN 은 `signInWithPassword`로 확인한 뒤 `auth.updateUser`로 변경), 로그아웃, 앱 버전 표시.
 
-PWA: manifest `name`/`short_name` "SW2HW 장부", `display: standalone`, `lang: ko`, `theme_color`, 아이콘 192·512 PNG(+ SVG 원본, 글자 "S"). 서비스워커는 vite-plugin-pwa `generateSW`, `registerType: 'prompt'`, 앱 셸만 프리캐시하고 Supabase 요청은 캐시하지 않는다. 입력 중인 화면이 말없이 새로고침되지 않게 자동 적용 대신 `useRegisterSW()` 의 `needRefresh` 로 오프라인 막대 옆에 "새 버전이 있습니다. 새로고침" 한 줄을 띄우고, 누르면 `updateServiceWorker(true)` 가 갈아끼운다.
+PWA: manifest `name`/`short_name` "SW2HW 장부", `display: standalone`, `lang: ko`, `theme_color`, 아이콘 192·512 PNG(+ SVG 원본, 글자 "S"). 서비스워커는 vite-plugin-pwa `generateSW`, `registerType: 'prompt'`, 앱 셸만 프리캐시하고 Supabase 요청은 캐시하지 않는다.
+
+**시작 관문(`src/StartupGate.tsx`)**: `registerType: 'prompt'` 라 아무도 `skipWaiting` 을 부르지 않으면 새 워커가 `waiting` 에 멈추고, 브라우저는 `visibilitychange`·`focus` 만으로는 업데이트를 검사하지 않는다(내비게이션·push/sync·명시적 `registration.update()` 뿐). 그래서 앱을 완전히 종료했다 다시 켜야 새 버전이 보였다. 관문이 이를 대신한다 — `main.tsx` 에서 `App` 을 감싸고, **처음 마운트될 때**, **`visibilitychange` 로 `visible` 이 될 때**, 그리고 **`pageshow` 의 `persisted`(bfcache 복귀, iOS 의 `visibilitychange` 가 더러 빠진다)** 에 스플래시(앱 이름 + 회전 표시 + 하단 상태 문구)를 덮고 다음을 거친다. 실행이 겹치지 않게 재진입 가드를 둔다.
+
+1. 하단 문구 "업데이트 확인 중". `navigator.serviceWorker.getRegistration()` → `fetch(swUrl, { cache: 'no-store' })` → `registration.update()`. `update()` 는 설치가 끝나기 전에 풀리므로 `registration.installing` 이 있으면 `statechange` 로 설치 완료까지 기다린 뒤 `registration.waiting` 을 본다(여기서 안 기다리면 새 버전을 놓치고 다음 실행에야 본다. workbox 의 `waiting` 이벤트도 설치 200ms 뒤에야 오므로 쓰지 않는다).
+2. 대기 중인 워커가 있으면 "업데이트 진행 중" → `updateServiceWorker(true)`. `controllerchange` 를 `{ once: true }` 로 한 번만 듣고 `location.reload()` 한다. 단념할 때는 `AbortController` 로 그 리스너를 걷는다.
+   **새로고침은 두 군데서 날 수 있어 한쪽을 꺼야 한다.** `registerType: 'prompt'` 일 때 `vite-plugin-pwa` 의 `registerSW` 는 workbox 의 `waiting` 이벤트 핸들러(`showSkipWaitingPrompt`) 안에서 `controlling` 리스너를 스스로 달고, 거기서 `window.location.reload()` 를 부른다(`node_modules/vite-plugin-pwa/dist/client/build/register.js`). 우리가 단 리스너가 아니므로 `AbortController` 로 걷지 못한다. 그대로 두면 관문이 적용을 단념하고 앱을 연 뒤 제어권 전환이 늦게 도착할 때 사용자가 입력하는 도중에 페이지가 새로고침돼 입력값이 날아간다. 그래서 `useRegisterSW({ onNeedReload: () => {} })` 로 플러그인 쪽 새로고침을 끄고, 새로고침 시점은 관문이 화면을 덮고 있는 동안만 우리가 고른다.
+3. 없으면 아무 안내 없이 스플래시를 걷는다.
+
+앱은 관문이 도는 동안에도 계속 붙여 둔 채 위를 덮기만 한다(`fixed inset-0 z-50`) — 떼었다 붙이면 쓰던 화면의 입력이 날아간다.
+
+**관문을 건너뛰는 조건**(`src/lib/startup.ts` 의 `shouldSkipGate`, 순수 함수라 단위 시험이 붙는다): ① 오프라인(`!navigator.onLine`), ② 경로가 결제 추가 화면(`…/add`) — 고른 사진·OCR 결과·입력값이 순수 메모리에만 있어 새로 받으면 전부 날아간다, ③ `sessionStorage` 의 `sw2hw:picking-photo` — `AddPayment` 가 파일 선택기를 여는 라벨 클릭 때 남기고 읽는 즉시 지운다(②와 두 겹으로 막는다. 진입점이 늘면 한쪽이 샌다. 파일 선택기가 실제로 `visibilitychange` 를 일으키는지는 iOS·Android 모두 1차 문서로 확정되지 않았으므로 두 겹이 필요하다), ④ `sessionStorage` 의 `sw2hw:just-updated-at` — 업데이트를 적용한 시각. 그로부터 10초(`JUST_UPDATED_WINDOW_MS`) 안에는 검사를 건너뛴다. 정상이라면 새로 로드한 뒤에는 최신이라 그냥 통과하므로 이 가드는 배포가 깨진 비정상 상황에서만 쓰이는 최후 방어선이다.
+
+**시간 상한**: 확인(`sw.js` 를 받고 새 워커가 설치를 마치기까지, 프리캐시 약 550KB)과 적용(`SKIP_WAITING` 을 보내고 제어권이 넘어오기까지)에 같은 6초(`TIMEOUT_MS`)를 쓴다. 로컬 루프백에서 확인 한 번이 1.5~2.4초 걸리는 것을 재었다 — 실제 네트워크는 더 걸리므로 3초로는 멀쩡한 갱신도 놓친다. 적용도 짧게 잡으면 안 된다: 단념한 뒤에는 새 워커가 이미 활성이라 대기 중인 워커가 없고 다음 관문이 "최신" 으로 보아 그냥 통과하므로, 한 번 단념하면 앱을 껐다 켜기 전까지 옛 코드에 머문다. 기다리는 동안은 스플래시가 덮고 있어 잃을 것이 없다. 실패해 재시도까지 해도 앱이 열리기까지 최악 12초다. 상한을 넘거나 실패하면 하단에 "업데이트를 확인하지 못했습니다" 를 띄우고 **재시도 1회**, 그래도 안 되면 **그냥 통과**한다. 관문은 어떤 경우에도 앱을 막지 않는다.
+
+오프라인 배너("네트워크 연결을 확인하세요")는 관문과 별개로 그대로 둔다.
 
 ## 7. 인증·보안
 
@@ -199,7 +214,7 @@ PWA: manifest `name`/`short_name` "SW2HW 장부", `display: standalone`, `lang: 
 
 ## 9. 테스트 전략
 
-- **Vitest 단위**: `src/lib/money.test.ts`(원 표기), `src/lib/dates.test.ts`(KST 월 경계, datetime-local 변환), `src/lib/cards.test.ts`(앞자리 자동 선택), `src/lib/image.test.ts`(축소 배율·data URL 접두어 제거. canvas 가 없어 `resizeToDataUrl`·`resizeToBlob` 자체는 부르지 않는다), `supabase/functions/ocr/{clova-general,gemini,merge,quota}.test.ts`(실제 응답 픽스처 → 네 필드 + weak, Gemini 응답 정규화, 병합 규칙, 한도 판단), `src/lib/ocr.test.ts`(함수 응답 → 오류 코드).
+- **Vitest 단위**: `src/lib/money.test.ts`(원 표기), `src/lib/dates.test.ts`(KST 월 경계, datetime-local 변환), `src/lib/cards.test.ts`(앞자리 자동 선택), `src/lib/image.test.ts`(축소 배율·data URL 접두어 제거. canvas 가 없어 `resizeToDataUrl`·`resizeToBlob` 자체는 부르지 않는다), `supabase/functions/ocr/{clova-general,gemini,merge,quota}.test.ts`(실제 응답 픽스처 → 네 필드 + weak, Gemini 응답 정규화, 병합 규칙, 한도 판단), `src/lib/ocr.test.ts`(함수 응답 → 오류 코드), `src/lib/startup.test.ts`(시작 관문을 건너뛰는 조건).
 - **DB 스모크 `scripts/db-smoke.mjs`**: Management API `POST /v1/projects/{ref}/database/query`(PAT)로 한 트랜잭션 안에서 저장 잔액 규칙 전부를 검증한다 — 결제 삽입 시 `cards.balance` 차감 / 금액 수정 시도(실패 기대) / 취소 시 복구 / 취소 되돌리기 시도(실패 기대) / 지난달 날짜 결제는 잔액 불변 / `balance_month` 가 지난달인 카드에 결제를 넣으면 예산으로 넘어간 뒤 차감 / 예산 수정은 잔액 불변 / `roll_over_balances()` 넘김 / `purge_old_payments()` 3개월 규칙 / 영수증 사진 삭제(결제를 지우면 트리거가 그 경로의 삭제 요청을 `pg_net` 큐에 남기고, Vault 비밀이 없으면 조용히 지나가되 결제 삭제는 성공한다. 큐 행도 같은 트랜잭션이라 롤백되므로 실제 저장소 요청은 나가지 않는다. 저장소 파일 자체는 SQL 로 볼 수 없어 확인하지 않는다) / OCR 한도(한도까지 `ocr_quota_consume` 하면 `available` 이 false, `ocr_quota_exhaust` 는 즉시 false, 기간 문자열이 바뀌면 다시 true, 최상위 `available` 은 둘 중 하나라도 살아 있으면 true). 마지막에 `raise exception` 으로 강제 롤백하므로 실 데이터에 흔적을 남기지 않는다. (superuser라 RLS는 우회되므로 RLS 자체는 아래 QA가 확인. `auth.uid()` 를 요구하는 RPC 는 `set_config('request.jwt.claims', ...)` 로 트랜잭션 안에서만 sub 클레임을 심어 확인한다)
 - **QA 시나리오(수동, 브라우저)**: 11절 체크리스트 전 항목. QA는 가능하면 로컬 Supabase(`supabase start`, Docker)에서 수행하고, 불가하면 클라우드에서 수행한 뒤 만든 테스트 데이터를 정리한다. RLS 확인: anon 키로 로그인 없이 select → 0건, 로그인 후 delete 시도 → 0건 삭제.
 - **빌드 게이트**: `npm run typecheck`, `npm test`, `npm run build`, `docker build` 모두 성공.
@@ -251,6 +266,9 @@ docs/adr/, docs/superpowers/specs/, docs/scrum/, docs/qa/
 - [ ] 저장소 `receipts` 는 비공개이고, 다른 폴더(`{다른 owner_id}/…`)의 파일은 읽거나 지울 수 없다
 - [ ] 현재 PIN 확인 후 PIN 변경, 변경 뒤에는 새 PIN 으로만 로그인
 - [ ] PWA 설치 가능(manifest, 아이콘, 서비스워커), 오프라인 배너
+- [ ] 시작 관문: 새 버전을 올린 뒤 앱을 다시 열면 한 번에 "업데이트 진행 중" → 새 버전 적용
+- [ ] 시작 관문: 결제 추가 화면에서 사진을 고르고 돌아오면 스플래시 없이 입력값이 남는다
+- [ ] 시작 관문: 네트워크를 끊고 열어도 앱이 막히지 않는다
 - [ ] DB 직접 접근: anon으로 0건, 로그인 후 delete 0건, 금액 update 거부
 - [ ] 공개 가입 차단 확인
 - [ ] GitHub Pages 배포 URL에서 로그인 화면 표시, 하위 경로 새로고침 정상
