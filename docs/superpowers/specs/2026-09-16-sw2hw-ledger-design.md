@@ -183,14 +183,15 @@ PWA: manifest `name`/`short_name` "SW2HW 장부", `display: standalone`, `lang: 
 **시작 관문(`src/StartupGate.tsx`)**: `registerType: 'prompt'` 라 아무도 `skipWaiting` 을 부르지 않으면 새 워커가 `waiting` 에 멈추고, 브라우저는 `visibilitychange`·`focus` 만으로는 업데이트를 검사하지 않는다(내비게이션·push/sync·명시적 `registration.update()` 뿐). 그래서 앱을 완전히 종료했다 다시 켜야 새 버전이 보였다. 관문이 이를 대신한다 — `main.tsx` 에서 `App` 을 감싸고, **처음 마운트될 때**, **`visibilitychange` 로 `visible` 이 될 때**, 그리고 **`pageshow` 의 `persisted`(bfcache 복귀, iOS 의 `visibilitychange` 가 더러 빠진다)** 에 스플래시(앱 이름 + 회전 표시 + 하단 상태 문구)를 덮고 다음을 거친다. 실행이 겹치지 않게 재진입 가드를 둔다.
 
 1. 하단 문구 "업데이트 확인 중". `navigator.serviceWorker.getRegistration()` → `fetch(swUrl, { cache: 'no-store' })` → `registration.update()`. `update()` 는 설치가 끝나기 전에 풀리므로 `registration.installing` 이 있으면 `statechange` 로 설치 완료까지 기다린 뒤 `registration.waiting` 을 본다(여기서 안 기다리면 새 버전을 놓치고 다음 실행에야 본다. workbox 의 `waiting` 이벤트도 설치 200ms 뒤에야 오므로 쓰지 않는다).
-2. 대기 중인 워커가 있으면 "업데이트 진행 중" → `updateServiceWorker(true)`. `controllerchange` 를 `{ once: true }` 로 한 번만 듣고 `location.reload()` 한다(단념할 때는 `AbortController` 로 그 리스너를 걷어, 나중에 쓰는 도중 조용히 새로고침되는 일이 없게 한다).
+2. 대기 중인 워커가 있으면 "업데이트 진행 중" → `updateServiceWorker(true)`. `controllerchange` 를 `{ once: true }` 로 한 번만 듣고 `location.reload()` 한다. 단념할 때는 `AbortController` 로 그 리스너를 걷는다.
+   **새로고침은 두 군데서 날 수 있어 한쪽을 꺼야 한다.** `registerType: 'prompt'` 일 때 `vite-plugin-pwa` 의 `registerSW` 는 workbox 의 `waiting` 이벤트 핸들러(`showSkipWaitingPrompt`) 안에서 `controlling` 리스너를 스스로 달고, 거기서 `window.location.reload()` 를 부른다(`node_modules/vite-plugin-pwa/dist/client/build/register.js`). 우리가 단 리스너가 아니므로 `AbortController` 로 걷지 못한다. 그대로 두면 관문이 적용을 단념하고 앱을 연 뒤 제어권 전환이 늦게 도착할 때 사용자가 입력하는 도중에 페이지가 새로고침돼 입력값이 날아간다. 그래서 `useRegisterSW({ onNeedReload: () => {} })` 로 플러그인 쪽 새로고침을 끄고, 새로고침 시점은 관문이 화면을 덮고 있는 동안만 우리가 고른다.
 3. 없으면 아무 안내 없이 스플래시를 걷는다.
 
 앱은 관문이 도는 동안에도 계속 붙여 둔 채 위를 덮기만 한다(`fixed inset-0 z-50`) — 떼었다 붙이면 쓰던 화면의 입력이 날아간다.
 
 **관문을 건너뛰는 조건**(`src/lib/startup.ts` 의 `shouldSkipGate`, 순수 함수라 단위 시험이 붙는다): ① 오프라인(`!navigator.onLine`), ② 경로가 결제 추가 화면(`…/add`) — 고른 사진·OCR 결과·입력값이 순수 메모리에만 있어 새로 받으면 전부 날아간다, ③ `sessionStorage` 의 `sw2hw:picking-photo` — `AddPayment` 가 파일 선택기를 여는 라벨 클릭 때 남기고 읽는 즉시 지운다(②와 두 겹으로 막는다. 진입점이 늘면 한쪽이 샌다. 파일 선택기가 실제로 `visibilitychange` 를 일으키는지는 iOS·Android 모두 1차 문서로 확정되지 않았으므로 두 겹이 필요하다), ④ `sessionStorage` 의 `sw2hw:just-updated-at` — 업데이트를 적용한 시각. 그로부터 10초(`JUST_UPDATED_WINDOW_MS`) 안에는 검사를 건너뛴다. 정상이라면 새로 로드한 뒤에는 최신이라 그냥 통과하므로 이 가드는 배포가 깨진 비정상 상황에서만 쓰이는 최후 방어선이다.
 
-**시간 상한**: 확인 한 번을 3초(`TIMEOUT_MS`)로 묶는다 — `sw.js` 를 받고 새 워커가 설치를 마치기까지(프리캐시 약 550KB)를 덮는 값이다. 적용 뒤 새로고침을 기다리는 상한은 2초(`RELOAD_TIMEOUT_MS`)로 더 짧다. 이미 받아 둔 워커에 메시지만 보내면 되므로 오래 걸릴 일이 없고, `controllerchange` 가 안 오면 이번 갱신은 놓치되 다음 관문에서 다시 잡는다. 실패해 재시도까지 해도 앱이 열리기까지 최악 6초다. 상한을 넘거나 실패하면 하단에 "업데이트를 확인하지 못했습니다" 를 띄우고 **재시도 1회**, 그래도 안 되면 **그냥 통과**한다. 관문은 어떤 경우에도 앱을 막지 않는다.
+**시간 상한**: 확인(`sw.js` 를 받고 새 워커가 설치를 마치기까지, 프리캐시 약 550KB)과 적용(`SKIP_WAITING` 을 보내고 제어권이 넘어오기까지)에 같은 6초(`TIMEOUT_MS`)를 쓴다. 로컬 루프백에서 확인 한 번이 1.5~2.4초 걸리는 것을 재었다 — 실제 네트워크는 더 걸리므로 3초로는 멀쩡한 갱신도 놓친다. 적용도 짧게 잡으면 안 된다: 단념한 뒤에는 새 워커가 이미 활성이라 대기 중인 워커가 없고 다음 관문이 "최신" 으로 보아 그냥 통과하므로, 한 번 단념하면 앱을 껐다 켜기 전까지 옛 코드에 머문다. 기다리는 동안은 스플래시가 덮고 있어 잃을 것이 없다. 실패해 재시도까지 해도 앱이 열리기까지 최악 12초다. 상한을 넘거나 실패하면 하단에 "업데이트를 확인하지 못했습니다" 를 띄우고 **재시도 1회**, 그래도 안 되면 **그냥 통과**한다. 관문은 어떤 경우에도 앱을 막지 않는다.
 
 오프라인 배너("네트워크 연결을 확인하세요")는 관문과 별개로 그대로 둔다.
 

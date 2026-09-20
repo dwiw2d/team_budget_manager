@@ -3,16 +3,17 @@ import { useRegisterSW } from "virtual:pwa-register/react";
 import { JUST_UPDATED_KEY, PHOTO_PICKER_KEY, shouldSkipGate } from "./lib/startup";
 
 /**
- * 확인 한 번의 상한. sw.js 를 받고 새 워커가 설치를 마치기까지를 덮는다(프리캐시 약 550KB).
- * 실패하면 재시도 1회라 앱이 열리기까지 최악 6초로 묶인다. 더 늘리면 기다림이 눈에 띈다.
+ * 관문의 한 단계를 묶는 상한. 확인(sw.js 를 받고 새 워커가 설치를 마치기까지, 프리캐시 약 550KB)과
+ * 적용(SKIP_WAITING 을 보내고 제어권이 넘어오기까지)에 같은 값을 쓴다.
+ *
+ * 로컬 루프백에서 확인 한 번이 1.5~2.4초 걸리는 것을 재어 보았다. 실제 네트워크는 더 걸리므로
+ * 3초로는 멀쩡한 갱신도 놓친다. 적용도 짧게 잡으면 안 된다 — 단념한 뒤에는 새 워커가 이미
+ * 활성이라 대기 중인 워커가 없고, 다음 관문이 "최신" 으로 보아 그냥 통과한다. 즉 한 번 단념하면
+ * 앱을 껐다 켜기 전까지 옛 코드에 머문다. 기다리는 동안은 스플래시가 덮고 있어 잃을 것이 없다.
+ *
+ * 실패하면 재시도 1회라 앱이 열리기까지 최악 12초다. 더 늘리면 기다림이 눈에 띈다.
  */
-const TIMEOUT_MS = 3000;
-
-/**
- * 적용 뒤 새로고침을 기다리는 상한. 확인보다 짧게 둔다 — 여기서는 이미 받아 둔 워커에 메시지만
- * 보내면 되므로 오래 걸릴 일이 없다. 어떤 이유로든 controllerchange 가 안 오면 그냥 앱을 연다.
- */
-const RELOAD_TIMEOUT_MS = 2000;
+const TIMEOUT_MS = 6000;
 
 const CHECKING = "업데이트 확인 중";
 const APPLYING = "업데이트 진행 중";
@@ -55,7 +56,13 @@ async function hasWaitingWorker(): Promise<boolean> {
 export default function StartupGate({ children }: { children: ReactNode }) {
   // 서비스 워커 등록은 여기 한 곳에서만 한다. registerType 이 'prompt' 라 대기 중인 워커는
   // updateServiceWorker(true) 를 부를 때까지 화면을 넘겨받지 않는다.
-  const { updateServiceWorker } = useRegisterSW();
+  //
+  // onNeedReload 로 플러그인의 자동 새로고침을 꺼 둔다. 끄지 않으면 plugin 이 workbox 의 waiting
+  // 이벤트에서 스스로 단 controlling 리스너가 제어권 전환을 보고 location.reload() 를 부른다.
+  // 그 리스너는 우리가 단 것이 아니라 아래 AbortController 로 걷지 못하므로, 관문이 적용을 단념한
+  // 뒤 늦게 제어권이 넘어오면 사용자가 입력하는 도중에 페이지가 새로고침돼 입력값이 날아갔다.
+  // 새로고침 시점은 아래에서 우리가 직접 고른다 — 관문이 화면을 덮고 있는 동안에만.
+  const { updateServiceWorker } = useRegisterSW({ onNeedReload: () => {} });
   // null 이면 관문이 걷히고 앱만 보인다. 문자열이면 스플래시 하단에 그 문구가 붙는다.
   const [status, setStatus] = useState<string | null>(CHECKING);
   const running = useRef(false);
@@ -100,9 +107,9 @@ export default function StartupGate({ children }: { children: ReactNode }) {
         );
         sessionStorage.setItem(JUST_UPDATED_KEY, String(Date.now()));
         // 새로고침이 오면 여기서 화면이 사라진다. 상한 안에 안 오면 단념하고 앱을 연다 —
-        // 이번 갱신은 놓치지만 다음 관문에서 다시 잡는다.
-        await withTimeout(updateServiceWorker(true).then(() => new Promise(() => {})), RELOAD_TIMEOUT_MS)
-          .catch(() => {});
+        // 이번 갱신은 앱을 껐다 켤 때까지 놓치되, 리스너를 걷었으니 늦게 제어권이 넘어와도
+        // 쓰던 화면이 새로고침되지는 않는다. 플러그인 리스너는 위에서 이미 꺼 두었다.
+        await withTimeout(updateServiceWorker(true).then(() => new Promise(() => {}))).catch(() => {});
         stop.abort();
       } finally {
         setStatus(null);
