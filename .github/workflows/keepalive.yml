@@ -26,22 +26,31 @@ jobs:
         env:
           URL: ${{ vars.VITE_SUPABASE_URL }}
           ANON: ${{ vars.VITE_SUPABASE_ANON_KEY }}
+        # GitHub 예약 실행은 붐비면 건너뛰어져 4시간 주기여도 하루 2번쯤만 돌았다(2026-11).
+        # 그래서 한 번 돌 때 1분 간격으로 3번 핑해 하루 요청 수를 채운다. 3번 모두 실패할 때만 작업을 실패시킨다.
         run: |
-          res=$(curl -sS -w '\n%{http_code}' -X POST "$URL/rest/v1/rpc/ping" \
-            -H "apikey: $ANON" \
-            -H "Authorization: Bearer $ANON" \
-            -H "Content-Type: application/json" \
-            -d '{}')
-          code=$(printf '%s' "$res" | tail -n1)
-          body=$(printf '%s' "$res" | sed '$d')
-          # 응답은 갱신된 시각뿐이라 비밀 값이 아니다. 그대로 남겨 둬야 나중에 원인을 찾을 수 있다.
-          echo "HTTP $code / 응답: $body"
-          if [ "$code" != "200" ]; then
-            echo "::error::ping 이 200 이 아니다. Supabase 가 일시정지됐거나 함수·권한이 빠졌을 수 있다."
-            exit 1
-          fi
-          if ! printf '%s' "$body" | grep -qE '[0-9]{4}-[0-9]{2}-[0-9]{2}T'; then
-            echo "::error::응답에 시각이 없다. ping() 이 갱신한 값을 돌려주지 않았다."
+          ok=0
+          for i in 1 2 3; do
+            [ "$i" -gt 1 ] && sleep 60
+            res=$(curl -sS -w '\n%{http_code}' -X POST "$URL/rest/v1/rpc/ping" \
+              -H "apikey: $ANON" \
+              -H "Authorization: Bearer $ANON" \
+              -H "Content-Type: application/json" \
+              -d '{}' || true)
+            code=$(printf '%s' "$res" | tail -n1)
+            body=$(printf '%s' "$res" | sed '$d')
+            # 응답은 갱신된 시각뿐이라 비밀 값이 아니다. 그대로 남겨 둬야 나중에 원인을 찾을 수 있다.
+            echo "[$i/3] HTTP $code / 응답: $body"
+            if [ "$code" != "200" ]; then
+              echo "::warning::[$i/3] ping 이 200 이 아니다. Supabase 가 일시정지됐거나 함수·권한이 빠졌을 수 있다."
+            elif ! printf '%s' "$body" | grep -qE '[0-9]{4}-[0-9]{2}-[0-9]{2}T'; then
+              echo "::warning::[$i/3] 응답에 시각이 없다. ping() 이 갱신한 값을 돌려주지 않았다."
+            else
+              ok=$((ok + 1))
+            fi
+          done
+          if [ "$ok" -eq 0 ]; then
+            echo "::error::ping 3번이 모두 실패했다."
             exit 1
           fi
 
